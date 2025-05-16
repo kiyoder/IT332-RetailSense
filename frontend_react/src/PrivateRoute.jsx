@@ -32,13 +32,6 @@ const PrivateRoute = ({ allowedRoles }) => {
       // However, the prompt mentions /profile/complete for new Google users, so that redirection is specific.
   }
 
-  // Check for profile completion if the route requires it (e.g., not /profile/complete itself)
-  if (profile && !profile.is_profile_complete && location.pathname !== '/profile/complete') {
-    // If profile is not complete, redirect to the complete profile page
-    // unless they are already trying to access it.
-    return <Navigate to="/profile/complete" state={{ from: location }} replace />;
-  }
-
   // Check if the route requires specific roles
   if (allowedRoles) {
     if (!profile || !profile.role) {

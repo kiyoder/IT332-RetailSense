@@ -17,7 +17,7 @@ const CompleteProfilePage = () => {
   useEffect(() => {
     // If the profile is already complete, redirect to dashboard
     if (profile?.is_profile_complete) {
-      navigate('/dashboard');
+      navigate('/overview');
     }
     // Pre-fill if some data exists but profile is not complete
     if (profile) {
@@ -62,7 +62,7 @@ const CompleteProfilePage = () => {
 
       setSuccess('Profile completed successfully! Redirecting...');
       await fetchProfile(user.id); // Re-fetch profile to update context
-      setTimeout(() => navigate('/dashboard'), 2000); // Redirect after a short delay
+      setTimeout(() => navigate('/overview'), 2000); // Redirect after a short delay
 
     } catch (err) {
       setError(err.message || 'Failed to complete profile.');

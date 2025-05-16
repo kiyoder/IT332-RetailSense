@@ -12,7 +12,7 @@ const LoginPage = () => {
   const [isEmailLoading, setIsEmailLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
 
-  const from = location.state?.from?.pathname || "/dashboard";
+  const from = location.state?.from?.pathname || "/overview";
 
   const handleLogin = async (e) => {
     e.preventDefault();

@@ -13,6 +13,7 @@
     "@craco/craco": "^7.1.0",
     "@supabase/supabase-js": "^2.49.4",
     "@tailwindcss/postcss": "^4.1.7",
+    "lucide-react": "^0.510.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router-dom": "^7.6.0"

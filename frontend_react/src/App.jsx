@@ -3,14 +3,21 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider, useAuth } from './AuthContext';
 import PrivateRoute from './PrivateRoute';
 import './index.css';
+import Layout from "./components/layout.jsx";
 
-import LoginPage from './pages/authentication/LoginPage.jsx';
-import RegisterPage from "./pages/authentication/RegisterPage.jsx";
+import LoginPage from './pages/UserManagement/LoginPage.jsx';
+import RegisterPage from "./pages/UserManagement/RegisterPage.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
 import AdminPage from "./pages/AdminPage.jsx";
-import ProfilePage from "./pages/authentication/ProfilePage.jsx";
-import CompleteProfilePage from "./pages/authentication/CompleteProfilePage.jsx";
+import ProfilePage from "./pages/UserManagement/ProfilePage.jsx";
+import CompleteProfilePage from "./pages/UserManagement/CompleteProfilePage.jsx";
 import NotFoundPage from "./pages/NotFoundPage.jsx";
+import OverviewPage from "./pages/Dashboard/Main.jsx";
+import HeatmapPage from "./pages/HeatmapGeneration/Heatmap.jsx";
+import AnalyticsPage from "./pages/Dashboard/Analytics.jsx";
+import ReportsPage from "./pages/ReportHistory/Reports.jsx";
+import SettingsPage from "./pages/UserManagement/Settings.jsx";
+import FloorplanPage from "./pages/HeatmapGeneration/Floorplan.jsx";
 
 
 function AppContent() {
@@ -27,9 +34,17 @@ function AppContent() {
 
       {/* Protected Routes */}
       <Route element={<PrivateRoute />}>
-        <Route path="/dashboard" element={<DashboardPage />} />
-        <Route path="/profile" element={<ProfilePage />} />
-        <Route path="/profile/complete" element={<CompleteProfilePage />} />
+        <Route element={<Layout />}>
+          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/overview" element={<OverviewPage />} />
+          <Route path="/profile" element={<ProfilePage />} />
+          <Route path="/profile/complete" element={<CompleteProfilePage />} />
+          <Route path="/heatmap" element={<HeatmapPage />} />
+          <Route path="/analytics" element={<AnalyticsPage />} />
+          <Route path="/reports" element={<ReportsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/floorplan" element={<FloorplanPage />} />
+        </Route>
       </Route>
 
       {/* Admin Protected Route */}
@@ -37,7 +52,7 @@ function AppContent() {
         <Route path="/admin" element={<AdminPage />} />
       </Route>
       
-      <Route path="/" element={<Navigate to="/dashboard" />} /> 
+      <Route path="/" element={<Navigate to="/overview" />} /> 
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );

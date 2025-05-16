@@ -21,7 +21,7 @@ const AdminPage = () => {
   if (profile?.role !== 'admin') {
     // Redirect to dashboard or show an unauthorized message
     // This is a fallback, PrivateRoute should be the primary guard
-    navigate('/dashboard'); 
+    navigate('/overview'); 
     return <div className="min-h-screen flex items-center justify-center bg-gray-100">Access Denied. Redirecting...</div>;
   }
 
@@ -56,7 +56,7 @@ const AdminPage = () => {
               </div>
                <div className="mt-6">
                 <button 
-                    onClick={() => navigate('/dashboard')}
+                    onClick={() => navigate('/overview')}
                     className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline mr-2"
                 >
                     Go to Dashboard

@@ -8,28 +8,13 @@ const PrivateRoute = ({ allowedRoles }) => {
 
   if (loading) {
     // You might want to show a loading spinner here
-    return <div>Loading...</div>;
+    return <div>Authenticating...</div>;
   }
 
   if (!user) {
     // User not logged in, redirect to login page
     // Pass the current location so we can redirect back after login
     return <Navigate to="/login" state={{ from: location }} replace />;
-  }
-
-  // If profile is still loading or not available, and it's needed for role check
-  // This might happen if fetchProfile is async and hasn't completed yet
-  // Or if the user's profile is incomplete and they are trying to access a role-protected route
-  if (allowedRoles && !profile) {
-      // If profile is required for role check and not available, 
-      // consider redirecting or showing an error/loading state.
-      // For now, let's assume if user is logged in but profile is missing, 
-      // they might be in the process of completing it.
-      // If is_profile_complete is a concern, that logic should be handled here or in AuthContext.
-      console.warn("PrivateRoute: User is logged in, but profile is not available for role check.");
-      // Depending on requirements, you might redirect to /profile/complete or deny access
-      // For a generic PrivateRoute, if roles are specified but profile isn't loaded, it's safer to deny or wait.
-      // However, the prompt mentions /profile/complete for new Google users, so that redirection is specific.
   }
 
   // Check for profile completion if the route requires it (e.g., not /profile/complete itself)

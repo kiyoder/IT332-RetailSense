@@ -4,12 +4,12 @@ import { AuthProvider, useAuth } from './AuthContext';
 import PrivateRoute from './PrivateRoute';
 import './index.css';
 
-import LoginPage from './pages/LoginPage';
-import RegisterPage from "./pages/RegisterPage.jsx";
+import LoginPage from './pages/authentication/LoginPage.jsx';
+import RegisterPage from "./pages/authentication/RegisterPage.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
 import AdminPage from "./pages/AdminPage.jsx";
-import ProfilePage from "./pages/ProfilePage.jsx";
-import CompleteProfilePage from "./pages/CompleteProfilePage.jsx";
+import ProfilePage from "./pages/authentication/ProfilePage.jsx";
+import CompleteProfilePage from "./pages/authentication/CompleteProfilePage.jsx";
 import NotFoundPage from "./pages/NotFoundPage.jsx";
 
 

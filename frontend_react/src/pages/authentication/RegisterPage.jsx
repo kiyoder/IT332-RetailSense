@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useAuth } from '../AuthContext'; // Adjusted path if AuthContext is in src
+import { useAuth } from '../../AuthContext.jsx'; // Adjusted path if AuthContext is in src
 import { useNavigate } from 'react-router-dom';
 
 const RegisterPage = () => {

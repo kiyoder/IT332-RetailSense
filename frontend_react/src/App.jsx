@@ -5,12 +5,12 @@ import PrivateRoute from './PrivateRoute';
 import './index.css';
 import Layout from "./components/layout.jsx";
 
-import LoginPage from './pages/UserManagement/LoginPage.jsx';
-import RegisterPage from "./pages/UserManagement/RegisterPage.jsx";
+import LoginPage from './pages/authentication/LoginPage.jsx';
+import RegisterPage from "./pages/authentication/RegisterPage.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
 import AdminPage from "./pages/AdminPage.jsx";
-import ProfilePage from "./pages/UserManagement/ProfilePage.jsx";
-import CompleteProfilePage from "./pages/UserManagement/CompleteProfilePage.jsx";
+import ProfilePage from "./pages/authentication/ProfilePage.jsx";
+import CompleteProfilePage from "./pages/authentication/CompleteProfilePage.jsx";
 import NotFoundPage from "./pages/NotFoundPage.jsx";
 import OverviewPage from "./pages/Dashboard/Main.jsx";
 import HeatmapPage from "./pages/HeatmapGeneration/Heatmap.jsx";
@@ -52,7 +52,7 @@ function AppContent() {
         <Route path="/admin" element={<AdminPage />} />
       </Route>
       
-      <Route path="/" element={<Navigate to="/overview" />} /> 
+      <Route path="/" element={<Navigate to="/overview" />} />
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );

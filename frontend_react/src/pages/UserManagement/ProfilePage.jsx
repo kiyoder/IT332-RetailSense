@@ -146,13 +146,6 @@ const ProfilePage = () => {
                         {loadingProfile ? 'Updating...' : 'Update Profile'}
                     </Button>
                 </form>
-                <Button
-                    onClick={handleLogout}
-                    disabled={loadingLogout}
-                    className="mt-4 w-full bg-gray-500 text-white py-2 px-4 rounded-md hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 disabled:opacity-50"
-                >
-                    {loadingLogout ? 'Logging out...' : 'Logout'}
-                </Button>
             </Card>
         </div>
     );

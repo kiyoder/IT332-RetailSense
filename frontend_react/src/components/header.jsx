@@ -4,13 +4,14 @@ import { ChevronDown, Search, Menu, Sun, Moon, User, LogOut, Settings } from "lu
 import { useAuth } from "../AuthContext"
 import { useSidebar } from "./sidebar"
 import { useTheme } from "../context/theme-context"
-import { Link } from "react-router-dom"
+import {Link, useNavigate} from "react-router-dom"
 
 export default function Header() {
   const { user, profile, signOut } = useAuth()
   const { collapsed, toggleSidebar } = useSidebar()
   const { theme, toggleTheme } = useTheme()
   const [dropdownOpen, setDropdownOpen] = useState(false)
+  const navigate = useNavigate();
 
   const toggleDropdown = () => {
     setDropdownOpen(!dropdownOpen)
@@ -18,9 +19,10 @@ export default function Header() {
 
   const handleLogout = async () => {
     try {
-      await signOut()
-      // Navigate to login page is handled by the AuthContext
+      await signOut();
+      navigate('/login');
     } catch (error) {
+
       console.error("Logout error:", error)
     }
   }

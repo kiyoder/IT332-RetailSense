@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../AuthContext.jsx'; // Adjusted path
 import { useNavigate } from 'react-router-dom';
-import {supabase} from "../../supabaseClient.js";
+import {supabase} from "@/supabaseClient.js";
+import { Button, Input, Form, Label, Card } from "@/components/ui";
 
 const ProfilePage = () => {
   const { user, profile, fetchProfile, signOut } = useAuth();
@@ -9,7 +10,8 @@ const ProfilePage = () => {
   const [username, setUsername] = useState('');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [loadingProfile, setLoadingProfile] = useState(false);
+  const [loadingLogout, setLoadingLogout] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
@@ -25,11 +27,11 @@ const ProfilePage = () => {
     e.preventDefault();
     setError('');
     setSuccess('');
-    setLoading(true);
+    setLoadingProfile(true);
 
     if (!username || !firstName || !lastName) {
         setError('Username, First Name and Last Name are required.');
-        setLoading(false);
+        setLoadingProfile(false);
         return;
     }
 
@@ -63,11 +65,11 @@ const ProfilePage = () => {
       setError(err.message || 'Failed to update profile.');
       console.error('Profile update error:', err);
     }
-    setLoading(false);
+    setLoadingProfile(false);
   };
 
   const handleLogout = async () => {
-    setLoading(true);
+    setLoadingLogout(true);
     try {
       await signOut();
       navigate('/login');
@@ -75,23 +77,23 @@ const ProfilePage = () => {
       setError('Failed to logout.');
       console.error('Logout error:', err);
     }
-    setLoading(false);
+    setLoadingLogout(false);
   };
 
-  if (!profile && !loading) {
+  if (!profile && !loadingLogout) {
     return <div className="min-h-screen flex items-center justify-center bg-gray-100">Loading profile...</div>;
   }
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-100 py-12">
-      <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-lg">
-        <h2 className="text-2xl font-bold mb-6 text-center text-gray-800">Your Profile</h2>
+      <Card className="bg-white p-8 rounded-lg shadow-md w-full max-w-lg !border-0">
+        <h2 className="text-2xl font-bold mb-0 text-center text-gray-800">Your Profile</h2>
         {error && <p className="bg-red-100 text-red-700 p-3 rounded mb-4 text-sm">{error}</p>}
         {success && <p className="bg-green-100 text-green-700 p-3 rounded mb-4 text-sm">{success}</p>}
         <form onSubmit={handleUpdateProfile}>
           <div className="mb-4">
-            <label htmlFor="email_display" className="block text-sm font-medium text-gray-700 mb-1">Email (cannot be changed)</label>
-            <input
+            <Label htmlFor="email_display" className="block text-sm font-medium text-gray-700 mb-1">Email (cannot be changed)</Label>
+            <Input
               type="email"
               id="email_display"
               value={user?.email || ''}
@@ -100,8 +102,8 @@ const ProfilePage = () => {
             />
           </div>
           <div className="mb-4">
-            <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">Username</label>
-            <input
+            <Label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">Username</Label>
+            <Input
               type="text"
               id="username"
               value={username}
@@ -112,8 +114,8 @@ const ProfilePage = () => {
             />
           </div>
           <div className="mb-4">
-            <label htmlFor="firstName" className="block text-sm font-medium text-gray-700 mb-1">First Name</label>
-            <input
+            <Label htmlFor="firstName" className="block text-sm font-medium text-gray-700 mb-1">First Name</Label>
+            <Input
               type="text"
               id="firstName"
               value={firstName}
@@ -124,8 +126,8 @@ const ProfilePage = () => {
             />
           </div>
           <div className="mb-6">
-            <label htmlFor="lastName" className="block text-sm font-medium text-gray-700 mb-1">Last Name</label>
-            <input
+            <Label htmlFor="lastName" className="block text-sm font-medium text-gray-700 mb-1">Last Name</Label>
+            <Input
               type="text"
               id="lastName"
               value={lastName}
@@ -135,22 +137,23 @@ const ProfilePage = () => {
               placeholder="Your Last Name"
             />
           </div>
-          <button
+          <Button
             type="submit"
-            disabled={loading}
+            disabled={loadingProfile}
+            onClick={handleUpdateProfile}
             className="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50"
           >
-            {loading ? 'Updating...' : 'Update Profile'}
-          </button>
+            {loadingProfile ? 'Updating...' : 'Update Profile'}
+          </Button>
         </form>
-        <button
+        <Button
             onClick={handleLogout}
-            disabled={loading}
+            disabled={loadingLogout}
             className="mt-4 w-full bg-gray-500 text-white py-2 px-4 rounded-md hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 disabled:opacity-50"
           >
-            {loading ? 'Logging out...' : 'Logout'}
-          </button>
-      </div>
+            {loadingLogout ? 'Logging out...' : 'Logout'}
+          </Button>
+      </Card>
     </div>
   );
 };

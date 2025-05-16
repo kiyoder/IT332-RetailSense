@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../AuthContext.jsx'; // Adjusted path
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '../../supabaseClient.js';
+import { supabase } from '@/supabaseClient.js';
 import { Button, Input, Form, Label, Card } from "@/components/ui";
 
 const CompleteProfilePage = () => {

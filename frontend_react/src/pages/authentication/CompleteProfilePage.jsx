@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../AuthContext.jsx'; // Adjusted path
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '../../supabaseClient.js'; // Import supabase client
+import { supabase } from '@/supabaseClient.js';
+import { Button, Input, Form, Label, Card } from "@/components/ui";
 
 const CompleteProfilePage = () => {
   const { user, profile, fetchProfile } = useAuth();
@@ -75,7 +76,7 @@ const CompleteProfilePage = () => {
     navigate('/login');
     return null;
   }
-  
+
   // Show loading if profile is being fetched initially by AuthContext
   // or if profile is null and user exists (edge case, should be handled by AuthContext redirect)
   if (profile === undefined) { // AuthContext loading state might be more reliable here
@@ -84,15 +85,15 @@ const CompleteProfilePage = () => {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-100 py-12">
-      <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-lg">
-        <h2 className="text-2xl font-bold mb-2 text-center text-gray-800">Complete Your Profile</h2>
-        <p className="text-sm text-gray-600 mb-6 text-center">Welcome! Please complete your profile to continue.</p>
-        {error && <p className="bg-red-100 text-red-700 p-3 rounded mb-4 text-sm">{error}</p>}
-        {success && <p className="bg-green-100 text-green-700 p-3 rounded mb-4 text-sm">{success}</p>}
-        <form onSubmit={handleCompleteProfile}>
-          <div className="mb-4">
-            <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">Username</label>
-            <input
+      <Card className="bg-white p-8 rounded-lg shadow-md w-full max-w-lg !border-0">
+        <h2 className="text-2xl font-bold mb-0 text-center text-gray-800">Complete Your Profile</h2>
+        <p className="text-sm text-gray-600 mb-0 text-center">Welcome! Please complete your profile to continue.</p>
+        {error && <p className="bg-red-100 text-red-700 p-3 rounded mb-0 text-sm">{error}</p>}
+        {success && <p className="bg-green-100 text-green-700 p-3 rounded mb-0 text-sm">{success}</p>}
+        <Form onSubmit={handleCompleteProfile}>
+          <div className="mb-0">
+            <Label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">Username</Label>
+            <Input
               type="text"
               id="username"
               value={username}
@@ -102,9 +103,9 @@ const CompleteProfilePage = () => {
               placeholder="Your Username"
             />
           </div>
-          <div className="mb-4">
-            <label htmlFor="firstName" className="block text-sm font-medium text-gray-700 mb-1">First Name</label>
-            <input
+          <div className="mb-0">
+            <Label htmlFor="firstName" className="block text-sm font-medium text-gray-700 mb-1">First Name</Label>
+            <Input
               type="text"
               id="firstName"
               value={firstName}
@@ -114,9 +115,9 @@ const CompleteProfilePage = () => {
               placeholder="Your First Name"
             />
           </div>
-          <div className="mb-6">
-            <label htmlFor="lastName" className="block text-sm font-medium text-gray-700 mb-1">Last Name</label>
-            <input
+          <div className="mb-0">
+            <Label htmlFor="lastName" className="block text-sm font-medium text-gray-700 mb-1">Last Name</Label>
+            <Input
               type="text"
               id="lastName"
               value={lastName}
@@ -126,15 +127,16 @@ const CompleteProfilePage = () => {
               placeholder="Your Last Name"
             />
           </div>
-          <button
+          <Button
             type="submit"
             disabled={loading}
+            onClick={handleCompleteProfile}
             className="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50"
           >
             {loading ? 'Saving...' : 'Complete Profile'}
-          </button>
-        </form>
-      </div>
+          </Button>
+        </Form>
+      </Card>
     </div>
   );
 };

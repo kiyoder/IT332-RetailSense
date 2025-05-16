@@ -8,7 +8,7 @@ import LoginPage from './pages/authentication/LoginPage.jsx';
 import RegisterPage from "./pages/authentication/RegisterPage.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
 import AdminPage from "./pages/AdminPage.jsx";
-import ProfilePage from "./pages/authentication/ProfilePage.jsx";
+import ProfilePage from "./pages/usermanagement/ProfilePage.jsx";
 import CompleteProfilePage from "./pages/authentication/CompleteProfilePage.jsx";
 import NotFoundPage from "./pages/NotFoundPage.jsx";
 

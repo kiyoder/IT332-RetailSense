@@ -4,3 +4,12 @@ python-dotenv
 supabase
 PyJWT[crypto]
 requests
+opencv-python
+numpy
+ultralytics
+deep-sort-realtime
+matplotlib
+pandas
+python-multipart
+celery
+redis

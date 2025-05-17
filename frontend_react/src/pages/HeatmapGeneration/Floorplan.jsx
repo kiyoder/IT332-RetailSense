@@ -2,14 +2,15 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, useParams, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { useSupabaseClient } from '@supabase/auth-helpers-react';
+import {useAuth} from "@/AuthContext.jsx";
 import axios from 'axios';
+
 
 export default function FloorplanPage() {
   const { directory } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const supabase = useSupabaseClient();
+  const { user, getSession } = useAuth();
   
   const [firstFrame, setFirstFrame] = useState(location.state?.firstFrame || null);
   const [corners, setCorners] = useState([]);
@@ -28,32 +29,39 @@ export default function FloorplanPage() {
       fetchFirstFrame();
     }
   }, [directory, firstFrame]);
-  
+
   const fetchFirstFrame = async () => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (!session) {
+      if (!user) {
         setError('Authentication required');
         return;
       }
-      
-      // Fetch the status to get the layout image URL
-      const response = await axios.get(
-        `${import.meta.env.VITE_API_URL}/api/status/${directory}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`
-          }
-        }
-      );
-      
-      // If we have a layout image, set it
-      if (response.data.layout_url) {
-        setFirstFrame(response.data.layout_url);
-      } else {
-        setError('Could not find floor plan image');
+
+      const session = await getSession();
+      const accessToken = session?.access_token;
+
+      if (!accessToken) {
+        setError('Authentication required');
+        return;
       }
+
+      const response = await axios.get(
+          `${import.meta.env.VITE_API_URL}/api/files/${directory}/layout.jpg`,
+          {
+            responseType: 'blob',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`
+            }
+          }
+      );
+
+      const blob = response.data;
+      const reader = new FileReader();
+      reader.onload = () => {
+        setFirstFrame(reader.result);
+      };
+      reader.readAsDataURL(blob);
+
     } catch (error) {
       console.error('Error fetching floor plan:', error);
       setError('Error fetching floor plan');
@@ -81,49 +89,58 @@ export default function FloorplanPage() {
     setCorners([]);
     setCurrentCorner(0);
   };
-  
+
   const saveCorners = async () => {
     if (corners.length !== 4) {
       setError('Please select all 4 corners');
       return;
     }
-    
+
     try {
       setSaving(true);
-      
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (!session) {
+      setError('');
+
+      if (!user) {
         setError('Authentication required');
         setSaving(false);
         return;
       }
-      
+
+      const session = await getSession();
+      const accessToken = session?.access_token;
+
+      if (!accessToken) {
+        setError('Authentication required');
+        setSaving(false);
+        return;
+      }
+
       // Save the corner coordinates
       await axios.post(
-        `${import.meta.env.VITE_API_URL}/api/corners/${directory}`,
-        { coordinates: corners },
-        {
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`
+          `${import.meta.env.VITE_API_URL}/api/corners/${directory}`,
+          { coordinates: corners },
+          {
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            }
           }
-        }
       );
-      
+
       // Start processing
       await axios.post(
-        `${import.meta.env.VITE_API_URL}/api/process/${directory}`,
-        {},
-        {
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`
+          `${import.meta.env.VITE_API_URL}/api/process/${directory}`,
+          {},
+          {
+            headers: {
+              'Authorization': `Bearer ${accessToken}`
+            }
           }
-        }
       );
-      
+
       // Navigate to the heatmap page
       navigate(`/heatmap/${directory}`);
-      
+
     } catch (error) {
       console.error('Error saving corners:', error);
       setError(error.response?.data?.detail || 'Error saving corner coordinates');

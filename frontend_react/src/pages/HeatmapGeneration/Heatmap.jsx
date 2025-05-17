@@ -2,13 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from "@/components/ui";
-
-import { useSupabaseClient } from '@supabase/auth-helpers-react';
+import {useAuth} from "@/AuthContext.jsx";
 import axios from 'axios';
 
 export default function HeatmapPage() {
   const { directory } = useParams();
-  const supabase = useSupabaseClient();
+  const { getSession } = useAuth();
   
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
@@ -24,9 +23,10 @@ export default function HeatmapPage() {
     
     const checkStatus = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const session = await getSession();
+        const accessToken = session?.access_token;
         
-        if (!session) {
+        if (!accessToken) {
           setError('Authentication required');
           setLoading(false);
           return;
@@ -36,7 +36,7 @@ export default function HeatmapPage() {
           `${import.meta.env.VITE_API_URL}/api/process/status/${directory}`,
           {
             headers: {
-              'Authorization': `Bearer ${session.access_token}`
+              'Authorization': `Bearer ${accessToken}`
             }
           }
         );
@@ -86,7 +86,7 @@ export default function HeatmapPage() {
     }, 3000);
     
     return () => clearInterval(interval);
-  }, [directory, processing, supabase]);
+  }, [directory, processing, getSession]);
   
   const downloadHeatmap = () => {
     if (heatmapUrl) {

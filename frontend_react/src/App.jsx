@@ -18,6 +18,7 @@ import AnalyticsPage from "./pages/Dashboard/Analytics.jsx";
 import ReportsPage from "./pages/ReportHistory/Reports.jsx";
 import SettingsPage from "./pages/UserManagement/Settings.jsx";
 import FloorplanPage from "./pages/HeatmapGeneration/Floorplan.jsx";
+import FileUploadPage from "./pages/HeatmapGeneration/FileUpload.jsx";
 
 
 function AppContent() {
@@ -44,6 +45,7 @@ function AppContent() {
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/floorplan" element={<FloorplanPage />} />
+            <Route path="/upload" element={< FileUploadPage/>} />
         </Route>
       </Route>
 

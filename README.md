@@ -55,10 +55,14 @@ project/
 ### 2. Backend Setup (FastAPI)
 
 *   Navigate to the `project/backend_python` directory.
-*   **Create and activate a virtual environment:**
+*   **Create and activate a virtual environment (make sure you have python version 3.11):**
     ```bash
-    python3.11 -m venv venv
-    source venv/bin/activate  # On Windows: venv\Scripts\activate
+    py -3.11 -m venv venv11
+    ```
+*   **Activate virtual environment**
+    ```bash
+    cd backend_python
+    venv11/Scripts/activate
     ```
 *   **Install dependencies:**
     ```bash

@@ -22,6 +22,7 @@ export const useSidebar = () => useContext(SidebarContext)
 
 const navItems = [
   { title: "Overview", icon: BarChart2, path: "/overview" },
+  { title: "Upload", icon: BarChart2, path: "/upload" },
   { title: "Heatmap", icon: Thermometer, path: "/heatmap" },
   { title: "Floorplan", icon: LayoutPanelTop, path: "/floorplan" },
   { title: "Analytics Center", icon: BarChart2, path: "/analytics" },

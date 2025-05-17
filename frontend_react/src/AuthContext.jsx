@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, {createContext, useContext, useState, useEffect, useMemo} from 'react';
+import { createAuthApiClient} from "@/AuthApiClient.jsx";
 import { supabase } from './supabaseClient'; // Ensure this path is correct
 
 const AuthContext = createContext();
@@ -7,6 +8,14 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true); // Unified loading state
+  const [session, setSession] = useState(true);
+
+  const apiClient = useMemo(() => {
+    return createAuthApiClient(async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      return session;
+    });
+  }, []);
 
   const fetchUserProfile = async (userId) => {
     if (!userId) {
@@ -39,10 +48,18 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const getSession = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    setSession(session);
+    return session;
+  };
+
   useEffect(() => {
     let isMounted = true;
     // console.log('AuthContext: useEffect - Mounting and setting up auth listener.');
     setLoading(true); // Explicitly set loading to true when the effect runs
+
+    getSession();
 
     const { data: authListener } = supabase.auth.onAuthStateChange(
         async (event, session) => {
@@ -83,6 +100,9 @@ export const AuthProvider = ({ children }) => {
     user,
     profile,
     loading,
+    session,
+    apiClient,
+    getSession,
     fetchProfile: fetchUserProfile,
     signIn: (options) => supabase.auth.signInWithPassword(options),
     signUp: (options) => supabase.auth.signUp(options),
@@ -90,6 +110,7 @@ export const AuthProvider = ({ children }) => {
       // console.log('AuthContext: signOut - Attempting to sign out.');
       setLoading(true);
       const { error } = await supabase.auth.signOut();
+      setSession(null);
       // if (error) console.error("AuthContext: signOut - Sign out error:", error.message);
       // onAuthStateChange will handle setting user/profile to null and loading to false
       return { error };

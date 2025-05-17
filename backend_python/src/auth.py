@@ -42,7 +42,7 @@ def decode_jwt_payload(token):
             payload_str = payload_bytes.decode('utf-8')
             import json
             payload = json.loads(payload_str)
-            print(f"Decoded JWT payload: {json.dumps(payload, indent=2)}")
+            # print(f"Decoded JWT payload: {json.dumps(payload, indent=2)}")
             return payload
         except Exception as e:
             print(f"Error decoding payload: {e}")
@@ -56,29 +56,29 @@ async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Securi
     print("DEBUG: get_current_user_id function called")
     token = credentials.credentials
 
-    print(f"\n==== AUTHENTICATION ATTEMPT ====")
-    print(f"Received token for validation (first 10 chars): {token[:10]}...")
-    print(f"Token length: {len(token)}")
+    # print(f"\n==== AUTHENTICATION ATTEMPT ====")
+    # print(f"Received token for validation (first 10 chars): {token[:10]}...")
+    # print(f"Token length: {len(token)}")
 
     # Decode and print JWT payload for debugging (without verification)
-    print("\n==== TOKEN PAYLOAD (NOT VERIFIED) ====")
+    # print("\n==== TOKEN PAYLOAD (NOT VERIFIED) ====")
     payload_debug = decode_jwt_payload(token)
 
     try:
         # Parse token header
         try:
             unverified_header = jwt.get_unverified_header(token)
-            print(f"\n==== TOKEN HEADER ====")
-            print(f"Algorithm: {unverified_header.get('alg', 'NOT FOUND')}")
-            print(f"Key ID (kid): {unverified_header.get('kid', 'NOT FOUND')}")
-            print(f"Type: {unverified_header.get('typ', 'NOT FOUND')}")
-            print(f"Full header: {unverified_header}")
+            # print(f"\n==== TOKEN HEADER ====")
+            # print(f"Algorithm: {unverified_header.get('alg', 'NOT FOUND')}")
+            # print(f"Key ID (kid): {unverified_header.get('kid', 'NOT FOUND')}")
+            # print(f"Type: {unverified_header.get('typ', 'NOT FOUND')}")
+            # print(f"Full header: {unverified_header}")
         except jwt.InvalidTokenError as e:
             print(f"Invalid token header: {str(e)}")
             raise HTTPException(status_code=HTTP_401_UNAUTHORIZED, detail=f"Invalid token header: {str(e)}")
 
         # Simplified authentication: only use JWT secret with HS256
-        print("\n==== SIMPLIFIED JWT VALIDATION ====")
+        # print("\n==== SIMPLIFIED JWT VALIDATION ====")
         if not SUPABASE_JWT_SECRET:
             print("No JWT secret available")
             raise HTTPException(
@@ -86,11 +86,11 @@ async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Securi
                 detail="Could not validate credentials (JWT secret not configured)"
             )
 
-        print(f"JWT secret is available (length: {len(SUPABASE_JWT_SECRET)})")
+        # print(f"JWT secret is available (length: {len(SUPABASE_JWT_SECRET)})")
 
         try:
             # Use HS256 for validation regardless of token alg
-            print("Attempting JWT validation with HS256")
+            # print("Attempting JWT validation with HS256")
             payload = jwt.decode(
                 token,
                 SUPABASE_JWT_SECRET,
@@ -107,7 +107,7 @@ async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Securi
                 print("User ID not found in token payload")
                 raise HTTPException(status_code=HTTP_401_UNAUTHORIZED, detail="User ID not found in token")
 
-            print(f"Successfully validated token using JWT secret with HS256")
+            # print(f"Successfully validated token using JWT secret with HS256")
             return user_id
 
         except jwt.ExpiredSignatureError:

@@ -3,6 +3,7 @@
 import { useState, createContext, useContext } from "react"
 import { Link, useLocation } from "react-router-dom"
 import {
+  Upload,
   BarChart2,
   HelpCircle,
   Menu,
@@ -22,9 +23,9 @@ export const useSidebar = () => useContext(SidebarContext)
 
 const navItems = [
   { title: "Overview", icon: BarChart2, path: "/overview" },
-  { title: "Upload", icon: BarChart2, path: "/upload" },
-  { title: "Heatmap", icon: Thermometer, path: "/heatmap" },
+  { title: "Upload", icon: Upload, path: "/upload" },
   { title: "Floorplan", icon: LayoutPanelTop, path: "/floorplan" },
+  { title: "Heatmap", icon: Thermometer, path: "/heatmap" },
   { title: "Analytics Center", icon: BarChart2, path: "/analytics" },
   { title: "Reports", icon: FileText, path: "/reports" },
 ]

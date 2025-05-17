@@ -9,7 +9,10 @@ from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Form
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from .main import get_current_user_id
+try:
+    from .auth import get_current_user_id
+except ImportError:
+    from src.auth import get_current_user_id
 
 router = APIRouter()
 

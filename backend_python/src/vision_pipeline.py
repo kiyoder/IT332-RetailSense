@@ -146,81 +146,153 @@ class VisionPipeline:
         tracks = self.tracker.update_tracks(detections, frame=frame)
         return [track.to_tlbr() for track in tracks if track.is_confirmed()]
 
+    # def _transform_coordinates(self, tracks: List, transform_matrix: np.ndarray) -> List[
+    #     Tuple[int, Tuple[float, float]]]:
+    #     """
+    #     Transform the tracked coordinates to floor coordinates using the perspective transform.
+    #
+    #     Args:
+    #         tracks: List of tracks from DeepSORT
+    #         transform_matrix: The perspective transformation matrix
+    #
+    #     Returns:
+    #         List of (track_id, (x, y)) tuples with transformed coordinates
+    #     """
+    #     transformed_coords = []
+    #
+    #     for track in tracks:
+    #         if hasattr(track, 'track_id'):
+    #             track_id = track.track_id
+    #             # Get the bottom center point of the bounding box (feet position)
+    #             bbox = track.to_tlbr()
+    #             x1, y1, x2, y2 = bbox
+    #             foot_x = (x1 + x2) / 2.0
+    #             foot_y = y2 * 1.0
+    #
+    #             # Apply perspective transformation
+    #             point = np.array([[[foot_x, foot_y]]], dtype=np.float32)
+    #             transformed_point = cv2.perspectiveTransform(point, transform_matrix)[0][0]
+    #
+    #             transformed_coords.append((
+    #                 int(track_id),
+    #                 (float(transformed_point[0]), float(transformed_point[1]))
+    #             ))
+    #
+    #     return transformed_coords
+    #
+    # def _generate_heatmap(self, transformed_coords: List[List[Tuple[int, Tuple[float, float]]]]) -> np.ndarray:
+    #     """
+    #     Generate a heatmap from the transformed coordinates.
+    #
+    #     Args:
+    #         transformed_coords: List of lists of transformed coordinates for each frame
+    #
+    #     Returns:
+    #         Heatmap as a numpy array
+    #     """
+    #     import matplotlib.pyplot as plt
+    #     from matplotlib.colors import LinearSegmentedColormap
+    #
+    #     # Create a 500x500 grid for the heatmap (same size as our transformed coordinates)
+    #     heatmap = np.zeros((500, 500))
+    #
+    #     # Accumulate presence in the grid
+    #     for frame_coords in transformed_coords:
+    #         for _, (x, y) in frame_coords:
+    #             if 0 <= x < 500 and 0 <= y < 500:
+    #                 # Add a gaussian blob around each point
+    #                 x, y = int(x), int(y)
+    #                 sigma = 10  # Spread of the gaussian
+    #                 for i in range(max(0, x - 3 * sigma), min(500, x + 3 * sigma)):
+    #                     for j in range(max(0, y - 3 * sigma), min(500, y + 3 * sigma)):
+    #                         heatmap[j, i] += np.exp(-((i - x) ** 2 + (j - y) ** 2) / (2 * sigma ** 2))
+    #
+    #     # Normalize the heatmap
+    #     if np.max(heatmap) > 0:
+    #         heatmap = heatmap / np.max(heatmap)
+    #
+    #     # Create a custom colormap (blue to red)
+    #     colors = [(0, 0, 1), (0, 1, 1), (0, 1, 0), (1, 1, 0), (1, 0, 0)]
+    #     cmap = LinearSegmentedColormap.from_list('custom_cmap', colors, N=256)
+    #
+    #     # Create the heatmap image
+    #     plt.figure(figsize=(10, 10))
+    #     plt.imshow(heatmap, cmap=cmap)
+    #     plt.colorbar(label='Normalized presence')
+    #     plt.title('People Presence Heatmap')
+    #     plt.axis('off')
+    #     plt.tight_layout()
+    #     plt.savefig(self.heatmap_path, dpi=300, bbox_inches='tight')
+    #     plt.close()
+    #
+    #     return heatmap
+
     def _transform_coordinates(self, tracks: List, transform_matrix: np.ndarray) -> List[
         Tuple[int, Tuple[float, float]]]:
-        """
-        Transform the tracked coordinates to floor coordinates using the perspective transform.
-
-        Args:
-            tracks: List of tracks from DeepSORT
-            transform_matrix: The perspective transformation matrix
-
-        Returns:
-            List of (track_id, (x, y)) tuples with transformed coordinates
-        """
+        """Transform tracked coordinates to floor coordinates."""
         transformed_coords = []
 
         for track in tracks:
-            if hasattr(track, 'track_id'):
-                track_id = track.track_id
-                # Get the bottom center point of the bounding box (feet position)
+            if not hasattr(track, 'to_tlbr'):
+                continue
+
+            try:
                 bbox = track.to_tlbr()
-                x1, y1, x2, y2 = bbox
-                foot_x = (x1 + x2) / 2
-                foot_y = y2
+                if len(bbox) != 4:  # Ensure we have [x1, y1, x2, y2]
+                    continue
 
-                # Apply perspective transformation
+                # Convert all coordinates to Python floats explicitly
+                x1, y1, x2, y2 = map(float, bbox)
+                foot_x = (x1 + x2) / 2.0
+                foot_y = float(y2)
+
+                # Prepare input for perspectiveTransform
                 point = np.array([[[foot_x, foot_y]]], dtype=np.float32)
-                transformed_point = cv2.perspectiveTransform(point, transform_matrix)[0][0]
+                transformed = cv2.perspectiveTransform(point, transform_matrix)
 
-                transformed_coords.append((track_id, (transformed_point[0], transformed_point[1])))
+                # Extract and convert results
+                if transformed.size >= 2:
+                    x, y = map(float, transformed[0][0])
+                    transformed_coords.append((int(track.track_id), (x, y)))
+
+            except Exception as e:
+                print(f"Error transforming track {getattr(track, 'track_id', '?')}: {str(e)}")
+                continue
 
         return transformed_coords
 
     def _generate_heatmap(self, transformed_coords: List[List[Tuple[int, Tuple[float, float]]]]) -> np.ndarray:
-        """
-        Generate a heatmap from the transformed coordinates.
+        """Generate heatmap from transformed coordinates."""
+        heatmap = np.zeros((500, 500), dtype=np.float64)
 
-        Args:
-            transformed_coords: List of lists of transformed coordinates for each frame
-
-        Returns:
-            Heatmap as a numpy array
-        """
-        import matplotlib.pyplot as plt
-        from matplotlib.colors import LinearSegmentedColormap
-
-        # Create a 500x500 grid for the heatmap (same size as our transformed coordinates)
-        heatmap = np.zeros((500, 500))
-
-        # Accumulate presence in the grid
         for frame_coords in transformed_coords:
             for _, (x, y) in frame_coords:
-                if 0 <= x < 500 and 0 <= y < 500:
-                    # Add a gaussian blob around each point
-                    x, y = int(x), int(y)
-                    sigma = 10  # Spread of the gaussian
-                    for i in range(max(0, x - 3 * sigma), min(500, x + 3 * sigma)):
-                        for j in range(max(0, y - 3 * sigma), min(500, y + 3 * sigma)):
-                            heatmap[j, i] += np.exp(-((i - x) ** 2 + (j - y) ** 2) / (2 * sigma ** 2))
+                try:
+                    # Ensure coordinates are valid numbers
+                    x = float(x)
+                    y = float(y)
+                    x_idx = int(round(np.clip(x, 0, 499)))
+                    y_idx = int(round(np.clip(y, 0, 499)))
 
-        # Normalize the heatmap
+                    # Add Gaussian distribution
+                    sigma = 10
+                    size = 3 * sigma
+                    x_min = max(0, x_idx - size)
+                    x_max = min(500, x_idx + size + 1)
+                    y_min = max(0, y_idx - size)
+                    y_max = min(500, y_idx + size + 1)
+
+                    # Vectorized Gaussian calculation
+                    xx, yy = np.mgrid[x_min:x_max, y_min:y_max]
+                    heatmap[y_min:y_max, x_min:x_max] += np.exp(-((xx - x_idx) ** 2 + (yy - y_idx) ** 2) / (2 * sigma ** 2))
+
+                except (ValueError, TypeError) as e:
+                    print(f"Invalid coordinate ({x}, {y}): {str(e)}")
+                    continue
+
+    # Normalize if needed
         if np.max(heatmap) > 0:
-            heatmap = heatmap / np.max(heatmap)
-
-        # Create a custom colormap (blue to red)
-        colors = [(0, 0, 1), (0, 1, 1), (0, 1, 0), (1, 1, 0), (1, 0, 0)]
-        cmap = LinearSegmentedColormap.from_list('custom_cmap', colors, N=256)
-
-        # Create the heatmap image
-        plt.figure(figsize=(10, 10))
-        plt.imshow(heatmap, cmap=cmap)
-        plt.colorbar(label='Normalized presence')
-        plt.title('People Presence Heatmap')
-        plt.axis('off')
-        plt.tight_layout()
-        plt.savefig(self.heatmap_path, dpi=300, bbox_inches='tight')
-        plt.close()
+            heatmap /= np.max(heatmap)
 
         return heatmap
 

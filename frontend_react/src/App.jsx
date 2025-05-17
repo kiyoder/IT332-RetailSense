@@ -40,11 +40,11 @@ function AppContent() {
           <Route path="/overview" element={<OverviewPage />} />
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="/profile/complete" element={<CompleteProfilePage />} />
-          <Route path="/heatmap" element={<HeatmapPage />} />
+          <Route path="/heatmap/:directory" element={<HeatmapPage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/floorplan" element={<FloorplanPage />} />
+          <Route path="/floorplan/:directory" element={<FloorplanPage />} />
             <Route path="/upload" element={< FileUploadPage/>} />
         </Route>
       </Route>

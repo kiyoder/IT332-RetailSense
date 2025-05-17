@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-// import { useSupabaseClient } from '@supabase/auth-helpers-react';
 import { useAuth } from '../../AuthContext.jsx'
 import axios from 'axios';
 
@@ -13,8 +12,7 @@ export default function FileUploadPage() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState('');
   const navigate = useNavigate();
-  // const supabase = useSupabaseClient();
-  const user = useAuth();
+  const { user, getSession } = useAuth();
 
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0];
@@ -74,14 +72,14 @@ export default function FileUploadPage() {
 
       // Get session for authentication
       console.log('Getting access token...');
-      const session = await user.getSession();
+      const session = await getSession();
       const accessToken = session?.access_token;
-      console.log('Access token:', accessToken ? '***' : 'NOT FOUND');
-      console.log('Token type:', typeof accessToken);
-      console.log('Token first 30 chars:', accessToken.substring(0, 30));
-      console.log('Token last 10 chars:', accessToken.substring(accessToken.length - 10));
+      // console.log('Access token:', accessToken ? '***' : 'NOT FOUND');
+      // console.log('Token type:', typeof accessToken);
+      // console.log('Token first 30 chars:', accessToken.substring(0, 30));
+      // console.log('Token last 10 chars:', accessToken.substring(accessToken.length - 10));
       if (!accessToken) {
-        console.error('No access token found in user object');
+        // console.error('No access token found in user object');
         setError('Authentication required');
         setUploading(false);
         return;

@@ -53,7 +53,7 @@ def decode_jwt_payload(token):
 
 
 async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Security(security)) -> str:
-    print("DEBUG: get_current_user_id function called")
+    # print("DEBUG: get_current_user_id function called")
     token = credentials.credentials
 
     # print(f"\n==== AUTHENTICATION ATTEMPT ====")

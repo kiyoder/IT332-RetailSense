@@ -4,7 +4,14 @@ import json
 import numpy as np
 import time
 import threading
-from typing import Dict, List, Tuple, Optional
+import traceback
+from typing import Dict, List, Tuple, Optional, Any, Union
+
+try:
+    from .status_utils import save_status_safely
+except ImportError:
+    from src.status_utils import save_status_safely
+
 from ultralytics import YOLO
 from deep_sort_realtime.deepsort_tracker import DeepSort
 
@@ -49,9 +56,8 @@ class VisionPipeline:
         self.total_frames = 0
 
     def _save_status(self):
-        """Save the current status to a JSON file."""
-        with open(self.status_path, "w") as f:
-            json.dump(self.status, f)
+        """Save the current status to a JSON file using atomic operations."""
+        save_status_safely(self.status_path, self.status)
 
     def _update_status(self, status: str, progress: int, message: str):
         """Update the processing status."""
@@ -85,10 +91,10 @@ class VisionPipeline:
 
         # Source points (from the image)
         src_points = np.array([
-            [coordinates[0]["x"], coordinates[0]["y"]],  # top-left
-            [coordinates[1]["x"], coordinates[1]["y"]],  # top-right
-            [coordinates[2]["x"], coordinates[2]["y"]],  # bottom-right
-            [coordinates[3]["x"], coordinates[3]["y"]]  # bottom-left
+            [int(coordinates[0]["x"]), int(coordinates[0]["y"])],  # top-left
+            [int(coordinates[1]["x"]), int(coordinates[1]["y"])],  # top-right
+            [int(coordinates[2]["x"]), int(coordinates[2]["y"])],  # bottom-right
+            [int(coordinates[3]["x"]), int(coordinates[3]["y"])]  # bottom-left
         ], dtype=np.float32)
 
         # Define the destination points (rectangle)
@@ -125,135 +131,175 @@ class VisionPipeline:
         for result in results:
             boxes = result.boxes.cpu().numpy()
             for box in boxes:
-                x1, y1, x2, y2 = box.xyxy[0]
-                confidence = box.conf[0]
-                class_id = box.cls[0]
-                detections.append([x1, y1, x2, y2, confidence, class_id])
+                try:
+                    # Explicitly convert numpy values to Python float
+                    xyxy = box.xyxy[0]
+                    if not isinstance(xyxy, (list, tuple, np.ndarray)) or len(xyxy) != 4:
+                        continue
+
+                    x1, y1, x2, y2 = float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])
+
+                    # Handle scalar values
+                    if hasattr(box.conf, 'item'):
+                        confidence = float(box.conf.item())
+                    else:
+                        confidence = float(box.conf[0]) if hasattr(box.conf, '__len__') else float(box.conf)
+
+                    if hasattr(box.cls, 'item'):
+                        class_id = float(box.cls.item())
+                    else:
+                        class_id = float(box.cls[0]) if hasattr(box.cls, '__len__') else float(box.cls)
+
+                    detections.append([x1, y1, x2, y2, confidence, class_id])
+                except Exception as e:
+                    print(f"Error processing detection: {str(e)}")
+                    continue
 
         return detections
 
-    def _track_people(self, frame: np.ndarray, detections: List[List[float]]) -> List[Dict]:
+    def _track_people(self, frame: np.ndarray, detections: List[List[float]]) -> List[Any]:
         """
-        Track people across frames using DeepSORT.
+        Track people across frames using DeepSORT with correct detection format.
 
         Args:
             frame: The video frame
-            detections: List of detections from YOLOv8
+            detections: List of detections from YOLOv8 in format [x1, y1, x2, y2, confidence, class_id]
 
         Returns:
             List of tracks with track_id, bbox, etc.
         """
-        tracks = self.tracker.update_tracks(detections, frame=frame)
-        return [track.to_tlbr() for track in tracks if track.is_confirmed()]
+        try:
+            # Debug: Print the type and structure of detections
+            print(
+                f"Detections type: {type(detections)}, length: {len(detections) if hasattr(detections, '__len__') else 'N/A'}")
 
-    # def _transform_coordinates(self, tracks: List, transform_matrix: np.ndarray) -> List[
-    #     Tuple[int, Tuple[float, float]]]:
-    #     """
-    #     Transform the tracked coordinates to floor coordinates using the perspective transform.
-    #
-    #     Args:
-    #         tracks: List of tracks from DeepSORT
-    #         transform_matrix: The perspective transformation matrix
-    #
-    #     Returns:
-    #         List of (track_id, (x, y)) tuples with transformed coordinates
-    #     """
-    #     transformed_coords = []
-    #
-    #     for track in tracks:
-    #         if hasattr(track, 'track_id'):
-    #             track_id = track.track_id
-    #             # Get the bottom center point of the bounding box (feet position)
-    #             bbox = track.to_tlbr()
-    #             x1, y1, x2, y2 = bbox
-    #             foot_x = (x1 + x2) / 2.0
-    #             foot_y = y2 * 1.0
-    #
-    #             # Apply perspective transformation
-    #             point = np.array([[[foot_x, foot_y]]], dtype=np.float32)
-    #             transformed_point = cv2.perspectiveTransform(point, transform_matrix)[0][0]
-    #
-    #             transformed_coords.append((
-    #                 int(track_id),
-    #                 (float(transformed_point[0]), float(transformed_point[1]))
-    #             ))
-    #
-    #     return transformed_coords
-    #
-    # def _generate_heatmap(self, transformed_coords: List[List[Tuple[int, Tuple[float, float]]]]) -> np.ndarray:
-    #     """
-    #     Generate a heatmap from the transformed coordinates.
-    #
-    #     Args:
-    #         transformed_coords: List of lists of transformed coordinates for each frame
-    #
-    #     Returns:
-    #         Heatmap as a numpy array
-    #     """
-    #     import matplotlib.pyplot as plt
-    #     from matplotlib.colors import LinearSegmentedColormap
-    #
-    #     # Create a 500x500 grid for the heatmap (same size as our transformed coordinates)
-    #     heatmap = np.zeros((500, 500))
-    #
-    #     # Accumulate presence in the grid
-    #     for frame_coords in transformed_coords:
-    #         for _, (x, y) in frame_coords:
-    #             if 0 <= x < 500 and 0 <= y < 500:
-    #                 # Add a gaussian blob around each point
-    #                 x, y = int(x), int(y)
-    #                 sigma = 10  # Spread of the gaussian
-    #                 for i in range(max(0, x - 3 * sigma), min(500, x + 3 * sigma)):
-    #                     for j in range(max(0, y - 3 * sigma), min(500, y + 3 * sigma)):
-    #                         heatmap[j, i] += np.exp(-((i - x) ** 2 + (j - y) ** 2) / (2 * sigma ** 2))
-    #
-    #     # Normalize the heatmap
-    #     if np.max(heatmap) > 0:
-    #         heatmap = heatmap / np.max(heatmap)
-    #
-    #     # Create a custom colormap (blue to red)
-    #     colors = [(0, 0, 1), (0, 1, 1), (0, 1, 0), (1, 1, 0), (1, 0, 0)]
-    #     cmap = LinearSegmentedColormap.from_list('custom_cmap', colors, N=256)
-    #
-    #     # Create the heatmap image
-    #     plt.figure(figsize=(10, 10))
-    #     plt.imshow(heatmap, cmap=cmap)
-    #     plt.colorbar(label='Normalized presence')
-    #     plt.title('People Presence Heatmap')
-    #     plt.axis('off')
-    #     plt.tight_layout()
-    #     plt.savefig(self.heatmap_path, dpi=300, bbox_inches='tight')
-    #     plt.close()
-    #
-    #     return heatmap
+            # Ensure detections is a list
+            if not isinstance(detections, list):
+                print(f"WARNING: Detections is not a list, it's a {type(detections)}")
+                return []
 
-    def _transform_coordinates(self, tracks: List, transform_matrix: np.ndarray) -> List[
+            # Validate and reformat detections for DeepSORT
+            # DeepSORT expects format: [[x1, y1, x2, y2], confidence, class_id]
+            deepsort_detections = []
+
+            for i, det in enumerate(detections):
+                try:
+                    # Debug: Print the type and structure of each detection
+                    print(f"  Detection {i} type: {type(det)}, value: {det}")
+
+                    # Skip if not a list, tuple, or numpy array
+                    if not isinstance(det, (list, tuple, np.ndarray)):
+                        print(f"  Skipping detection {i}: Not a list/tuple/array, it's a {type(det)}")
+                        continue
+
+                    # Convert numpy arrays to lists
+                    if isinstance(det, np.ndarray):
+                        det = det.tolist()
+
+                    # Ensure we have exactly 6 elements [x1, y1, x2, y2, confidence, class_id]
+                    if len(det) != 6:
+                        print(f"  Skipping detection {i}: Expected 6 elements, got {len(det)}")
+                        continue
+
+                    # Extract and convert values to Python floats
+                    try:
+                        x1 = float(det[0])
+                        y1 = float(det[1])
+                        x2 = float(det[2])
+                        y2 = float(det[3])
+                        confidence = float(det[4])
+                        class_id = float(det[5])
+                    except (TypeError, ValueError) as e:
+                        print(f"  Error converting detection {i} values to float: {e}")
+                        continue
+
+                    # Create bbox as a list of 4 floats
+                    bbox = [x1, y1, x2, y2]
+
+                    # Format for DeepSORT: [bbox, confidence, class_id]
+                    deepsort_detection = [bbox, confidence, class_id]
+                    deepsort_detections.append(deepsort_detection)
+
+                except Exception as e:
+                    print(f"  Error processing detection {i}: {str(e)}")
+                    continue
+
+            # Debug: Print the number of valid detections
+            print(f"Valid DeepSORT detections: {len(deepsort_detections)} out of {len(detections)}")
+
+            # Only proceed if we have valid detections
+            if not deepsort_detections:
+                return []
+
+            # Update tracks with properly formatted detections
+            tracks = self.tracker.update_tracks(deepsort_detections, frame=frame)
+            return [track for track in tracks if track.is_confirmed()]
+
+        except Exception as e:
+            print(f"Error tracking people: {str(e)}")
+            traceback.print_exc()  # Print full stack trace for debugging
+            return []
+
+    def _transform_coordinates(self, tracks: List[Any], transform_matrix: np.ndarray) -> List[
         Tuple[int, Tuple[float, float]]]:
-        """Transform tracked coordinates to floor coordinates."""
+        """
+        Transform tracked coordinates to floor coordinates using the perspective transform.
+
+        Args:
+            tracks: List of tracks from DeepSORT
+            transform_matrix: The perspective transformation matrix
+
+        Returns:
+            List of (track_id, (x, y)) tuples with transformed coordinates
+        """
         transformed_coords = []
 
         for track in tracks:
-            if not hasattr(track, 'to_tlbr'):
-                continue
-
             try:
+                # Ensure track has required attributes
+                if not hasattr(track, 'track_id') or not hasattr(track, 'to_tlbr'):
+                    continue
+
+                # Get track ID as integer
+                track_id = int(track.track_id)
+
+                # Get bounding box coordinates
                 bbox = track.to_tlbr()
-                if len(bbox) != 4:  # Ensure we have [x1, y1, x2, y2]
+
+                # Ensure bbox is valid and has 4 elements
+                if not isinstance(bbox, (list, tuple, np.ndarray)):
+                    continue
+
+                # Convert bbox to list if it's a numpy array
+                if isinstance(bbox, np.ndarray):
+                    bbox = bbox.tolist()
+
+                # Ensure we have exactly 4 elements
+                if len(bbox) != 4:
                     continue
 
                 # Convert all coordinates to Python floats explicitly
-                x1, y1, x2, y2 = map(float, bbox)
-                foot_x = (x1 + x2) / 2.0
-                foot_y = float(y2)
+                x1, y1, x2, y2 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
 
-                # Prepare input for perspectiveTransform
+                # Calculate foot position (bottom center of bounding box)
+                foot_x = (x1 + x2) / 2.0
+                foot_y = y2
+
+                # Prepare point for perspective transform
                 point = np.array([[[foot_x, foot_y]]], dtype=np.float32)
+
+                # Apply perspective transformation
                 transformed = cv2.perspectiveTransform(point, transform_matrix)
 
-                # Extract and convert results
-                if transformed.size >= 2:
-                    x, y = map(float, transformed[0][0])
-                    transformed_coords.append((int(track.track_id), (x, y)))
+                # Extract transformed coordinates as Python floats
+                tx = float(transformed[0][0][0])
+                ty = float(transformed[0][0][1])
+
+                # Create a proper tuple for the coordinates
+                coord_tuple = (float(tx), float(ty))
+
+                # Add to transformed coordinates list
+                transformed_coords.append((int(track_id), coord_tuple))
 
             except Exception as e:
                 print(f"Error transforming track {getattr(track, 'track_id', '?')}: {str(e)}")
@@ -262,37 +308,95 @@ class VisionPipeline:
         return transformed_coords
 
     def _generate_heatmap(self, transformed_coords: List[List[Tuple[int, Tuple[float, float]]]]) -> np.ndarray:
-        """Generate heatmap from transformed coordinates."""
+        """
+        Generate a heatmap from the transformed coordinates.
+
+        Args:
+            transformed_coords: List of lists of transformed coordinates for each frame
+
+        Returns:
+            Heatmap as a numpy array
+        """
+        import matplotlib
+        # Use Agg backend to avoid GUI thread issues
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import LinearSegmentedColormap
+
+        # Create a 500x500 grid for the heatmap (same size as our transformed coordinates)
         heatmap = np.zeros((500, 500), dtype=np.float64)
 
-        for frame_coords in transformed_coords:
-            for _, (x, y) in frame_coords:
+        # Validate transformed_coords is a list
+        if not isinstance(transformed_coords, list):
+            print(f"Error: transformed_coords is not a list: {type(transformed_coords)}")
+            return heatmap
+
+        # Accumulate presence in the grid
+        for frame_idx, frame_coords in enumerate(transformed_coords):
+            # Validate frame_coords is a list
+            if not isinstance(frame_coords, list):
+                print(f"Error: frame_coords at index {frame_idx} is not a list: {type(frame_coords)}")
+                continue
+
+            for coord_idx, coord_pair in enumerate(frame_coords):
                 try:
-                    # Ensure coordinates are valid numbers
-                    x = float(x)
-                    y = float(y)
+                    # Validate coord_pair structure
+                    if not isinstance(coord_pair, tuple) or len(coord_pair) != 2:
+                        print(f"Error: Invalid coord_pair at frame {frame_idx}, index {coord_idx}: {coord_pair}")
+                        continue
+
+                    # Unpack track_id and coordinates
+                    track_id, coords = coord_pair
+
+                    # Validate coords is a tuple of two values
+                    if not isinstance(coords, tuple) or len(coords) != 2:
+                        print(f"Error: Invalid coords format at frame {frame_idx}, track {track_id}: {coords}")
+                        continue
+
+                    # Extract and convert coordinates to float
+                    x, y = float(coords[0]), float(coords[1])
+
+                    # Clip coordinates to valid range
                     x_idx = int(round(np.clip(x, 0, 499)))
                     y_idx = int(round(np.clip(y, 0, 499)))
 
-                    # Add Gaussian distribution
-                    sigma = 10
+                    # Add Gaussian distribution around each point
+                    sigma = 10  # Spread of the gaussian
                     size = 3 * sigma
+
+                    # Calculate bounds with clipping
                     x_min = max(0, x_idx - size)
                     x_max = min(500, x_idx + size + 1)
                     y_min = max(0, y_idx - size)
                     y_max = min(500, y_idx + size + 1)
 
-                    # Vectorized Gaussian calculation
-                    xx, yy = np.mgrid[x_min:x_max, y_min:y_max]
-                    heatmap[y_min:y_max, x_min:x_max] += np.exp(-((xx - x_idx) ** 2 + (yy - y_idx) ** 2) / (2 * sigma ** 2))
+                    # Use vectorized operations for Gaussian calculation
+                    y_grid, x_grid = np.mgrid[y_min:y_max, x_min:x_max]
+                    gaussian = np.exp(-((x_grid - x_idx) ** 2 + (y_grid - y_idx) ** 2) / (2 * sigma ** 2))
+                    heatmap[y_min:y_max, x_min:x_max] += gaussian
 
-                except (ValueError, TypeError) as e:
-                    print(f"Invalid coordinate ({x}, {y}): {str(e)}")
+                except (ValueError, TypeError, IndexError) as e:
+                    print(f"Error processing coordinate at frame {frame_idx}, index {coord_idx}: {str(e)}")
                     continue
 
-    # Normalize if needed
-        if np.max(heatmap) > 0:
-            heatmap /= np.max(heatmap)
+        # Normalize the heatmap
+        max_value = np.max(heatmap)
+        if max_value > 0:
+            heatmap = heatmap / max_value
+
+        # Create a custom colormap (blue to red)
+        colors = [(0, 0, 1), (0, 1, 1), (0, 1, 0), (1, 1, 0), (1, 0, 0)]
+        cmap = LinearSegmentedColormap.from_list('custom_cmap', colors, N=256)
+
+        # Create the heatmap image
+        plt.figure(figsize=(10, 10))
+        plt.imshow(heatmap, cmap=cmap)
+        plt.colorbar(label='Normalized presence')
+        plt.title('People Presence Heatmap')
+        plt.axis('off')
+        plt.tight_layout()
+        plt.savefig(self.heatmap_path, dpi=300, bbox_inches='tight')
+        plt.close()
 
         return heatmap
 
@@ -305,20 +409,22 @@ class VisionPipeline:
         """
         import pandas as pd
 
+        # Validate transformed_coords
+        if not isinstance(transformed_coords, list):
+            print("Error: transformed_coords is not a list")
+            return
+
         # Get video properties
         cap = cv2.VideoCapture(self.video_path)
-        fps = cap.get(cv2.CAP_PROP_FPS)
+        fps = float(cap.get(cv2.CAP_PROP_FPS))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         cap.release()
 
         # Calculate video duration in seconds
         duration_seconds = total_frames / fps if fps > 0 else 0
 
-        # For demonstration, we'll create synthetic hourly data
-        # In a real implementation, you would use timestamps from the video
-
         # Create a DataFrame with hourly counts
-        hours = int(duration_seconds / 3600) + 1
+        hours = max(1, int(duration_seconds / 3600) + 1)
 
         # Count unique track IDs per frame and aggregate by hour
         hourly_data = []
@@ -327,14 +433,26 @@ class VisionPipeline:
             start_frame = int(hour * 3600 * fps)
             end_frame = int(min((hour + 1) * 3600 * fps, total_frames))
 
-            # Get frames in this hour
+            # Get frames in this hour, with bounds checking
+            start_frame = max(0, min(start_frame, len(transformed_coords) - 1))
+            end_frame = max(0, min(end_frame, len(transformed_coords)))
+
             hour_frames = transformed_coords[start_frame:end_frame]
 
             # Count unique track IDs in this hour
             unique_ids = set()
             for frame_coords in hour_frames:
-                for track_id, _ in frame_coords:
-                    unique_ids.add(track_id)
+                if not isinstance(frame_coords, list):
+                    continue
+
+                for coord_pair in frame_coords:
+                    try:
+                        if not isinstance(coord_pair, tuple) or len(coord_pair) != 2:
+                            continue
+                        track_id, _ = coord_pair
+                        unique_ids.add(int(track_id))
+                    except Exception:
+                        continue
 
             count = len(unique_ids)
             hourly_data.append({
@@ -384,7 +502,7 @@ class VisionPipeline:
 
             # Get video properties
             self.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            fps = cap.get(cv2.CAP_PROP_FPS)
+            fps = float(cap.get(cv2.CAP_PROP_FPS))
 
             # Store transformed coordinates for each frame
             all_transformed_coords = []
@@ -415,6 +533,11 @@ class VisionPipeline:
 
                 # Transform coordinates
                 transformed_coords = self._transform_coordinates(tracks, transform_matrix)
+
+                # Validate transformed_coords before adding to all_transformed_coords
+                if not isinstance(transformed_coords, list):
+                    transformed_coords = []
+
                 all_transformed_coords.append(transformed_coords)
 
             # Release the video
@@ -433,6 +556,8 @@ class VisionPipeline:
 
         except Exception as e:
             self._update_status("error", 0, f"Error processing video: {str(e)}")
+            import traceback
+            traceback.print_exc()
             raise
 
 
@@ -490,32 +615,9 @@ def get_processing_status(directory: str) -> Dict:
     Returns:
         The current status of the processing task
     """
-    # Check if the directory exists
-    user_dir = os.path.join(PROJECT_DATA_DIR, directory)
-    if not os.path.exists(user_dir):
-        return {
-            "status": "error",
-            "progress": 0,
-            "message": f"Directory not found: {directory}"
-        }
+    try:
+        from .status_utils import get_processing_status as get_status
+    except ImportError:
+        from src.status_utils import get_processing_status as get_status
 
-    # Check if status file exists
-    status_path = os.path.join(user_dir, "status.json")
-    if os.path.exists(status_path):
-        with open(status_path, "r") as f:
-            return json.load(f)
-
-    # Check if heatmap exists
-    heatmap_path = os.path.join(user_dir, "heatmap.png")
-    if os.path.exists(heatmap_path):
-        return {
-            "status": "completed",
-            "progress": 100,
-            "message": "Processing completed"
-        }
-
-    return {
-        "status": "unknown",
-        "progress": 0,
-        "message": "Processing status unknown"
-    }
+    return get_status(directory)

@@ -4,9 +4,15 @@ from fastapi import APIRouter, Request, Depends
 from fastapi.responses import FileResponse, Response, JSONResponse
 from starlette.responses import PlainTextResponse
 
+# Import authentication function
+try:
+    from .auth import get_current_user_id
+except ImportError:
+    from src.auth import get_current_user_id
+
 # Set up logging with maximum verbosity
 logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger("emergency_file_handler")
+logger = logging.getLogger("secure_file_handler")
 logger.setLevel(logging.DEBUG)
 
 # Create a router with a different prefix to avoid conflicts
@@ -40,21 +46,50 @@ async def test_endpoint(request: Request):
     """Simple test endpoint to verify the router is working."""
     headers = {}
     headers = add_cors_headers(headers, request)
-    return PlainTextResponse("Emergency file handler is working!", headers=headers)
+    return PlainTextResponse("Secure file handler is working!", headers=headers)
 
 
 @router.head("/files/{directory}/{filename}")
-async def emergency_head_file(directory: str, filename: str, request: Request):
+async def emergency_head_file(
+    directory: str,
+    filename: str,
+    request: Request,
+    current_user_id: str = Depends(get_current_user_id)
+):
     """
-    Emergency HEAD endpoint for checking if files exist.
+    Secure HEAD endpoint for checking if files exist.
+    Only allows access if the directory belongs to the authenticated user.
     """
     try:
         # Log extensive debugging information
-        logger.debug(f"EMERGENCY HEAD file request - Directory: {directory}, Filename: {filename}")
+        logger.debug(f"HEAD file request - Directory: {directory}, Filename: {filename}, User ID: {current_user_id}")
 
         # Construct the file path
         file_path = os.path.join(PROJECT_DATA_DIR, directory, filename)
         logger.debug(f"Checking file existence: {file_path}")
+
+        # Check if directory exists first
+        dir_path = os.path.join(PROJECT_DATA_DIR, directory)
+        if not os.path.exists(dir_path):
+            logger.warning(f"Directory not found: {dir_path}")
+            headers = {}
+            headers = add_cors_headers(headers, request)
+            return Response(status_code=404, headers=headers)
+
+        # Proper authorization check - only allow access if directory belongs to user
+        is_authorized = (
+            directory.startswith(current_user_id) or
+            current_user_id in directory
+        )
+
+        # Log authorization status
+        logger.debug(f"Authorization status for HEAD {directory}/{filename}: {is_authorized}")
+
+        if not is_authorized:
+            logger.warning(f"Access denied - Directory: {directory} does not match User ID: {current_user_id}")
+            headers = {}
+            headers = add_cors_headers(headers, request)
+            return Response(status_code=403, headers=headers)
 
         # Check if file exists
         if not os.path.exists(file_path):
@@ -80,7 +115,7 @@ async def emergency_head_file(directory: str, filename: str, request: Request):
 
     except Exception as e:
         # Log the exception with full details
-        logger.error(f"Emergency HEAD handler error: {str(e)}", exc_info=True)
+        logger.error(f"HEAD handler error: {str(e)}", exc_info=True)
 
         # Ensure CORS headers are included even in case of errors
         headers = {}
@@ -89,14 +124,51 @@ async def emergency_head_file(directory: str, filename: str, request: Request):
 
 
 @router.get("/files/{directory}/{filename}")
-async def emergency_get_file(directory: str, filename: str, request: Request):
+async def emergency_get_file(
+    directory: str,
+    filename: str,
+    request: Request,
+    current_user_id: str = Depends(get_current_user_id)
+):
     """
-    Emergency file serving endpoint that bypasses all authorization.
+    Secure file serving endpoint that enforces user-based authorization.
+    Only allows access if the directory belongs to the authenticated user.
     """
     try:
         # Log extensive debugging information
-        logger.debug(f"EMERGENCY GET file request - Directory: {directory}, Filename: {filename}")
+        logger.debug(f"GET file request - Directory: {directory}, Filename: {filename}, User ID: {current_user_id}")
         logger.debug(f"Request headers: {request.headers}")
+
+        # Check if directory exists first
+        dir_path = os.path.join(PROJECT_DATA_DIR, directory)
+        if not os.path.exists(dir_path):
+            logger.warning(f"Directory not found: {dir_path}")
+            headers = {}
+            headers = add_cors_headers(headers, request)
+            return JSONResponse(
+                status_code=404,
+                content={"detail": f"Directory not found: {directory}"},
+                headers=headers
+            )
+
+        # Proper authorization check - only allow access if directory belongs to user
+        is_authorized = (
+            directory.startswith(current_user_id) or
+            current_user_id in directory
+        )
+
+        # Log authorization status
+        logger.debug(f"Authorization status for GET {directory}/{filename}: {is_authorized}")
+
+        if not is_authorized:
+            logger.warning(f"Access denied - Directory: {directory} does not match User ID: {current_user_id}")
+            headers = {}
+            headers = add_cors_headers(headers, request)
+            return JSONResponse(
+                status_code=403,
+                content={"detail": f"Access denied - User ID {current_user_id} not authorized for directory {directory}"},
+                headers=headers
+            )
 
         # Construct the file path
         file_path = os.path.join(PROJECT_DATA_DIR, directory, filename)
@@ -127,7 +199,7 @@ async def emergency_get_file(directory: str, filename: str, request: Request):
         logger.debug(f"Content type: {content_type}")
 
         # Return the file with CORS headers
-        logger.debug(f"Serving file via emergency handler: {file_path}")
+        logger.debug(f"Serving file via secure handler: {file_path}")
 
         # Create a FileResponse with explicit headers
         response = FileResponse(
@@ -145,34 +217,13 @@ async def emergency_get_file(directory: str, filename: str, request: Request):
 
     except Exception as e:
         # Log the exception with full details
-        logger.error(f"Emergency handler error: {str(e)}", exc_info=True)
+        logger.error(f"Secure handler error: {str(e)}", exc_info=True)
 
         # Ensure CORS headers are included even in case of errors
         headers = {}
         headers = add_cors_headers(headers, request)
         return JSONResponse(
             status_code=500,
-            content={"detail": f"Emergency handler error: {str(e)}"},
+            content={"detail": f"Secure handler error: {str(e)}"},
             headers=headers
         )
-
-
-# Instructions for adding this router to main.py:
-"""
-To use this emergency file handler, add the following to your main.py:
-
-# Import the emergency file handler
-try:
-    from .emergency_file_handler import router as emergency_router
-except ImportError:
-    from src.emergency_file_handler import router as emergency_router
-
-# Include the emergency router
-app.include_router(emergency_router)
-
-Then restart your FastAPI server and access files using:
-http://localhost:8000/emergency/files/{directory}/{filename}
-
-For example:
-http://localhost:8000/emergency/files/a312352e-5fc0-4013-ad37-19ecda9ecb6d_20250518_135221/heatmap.png
-"""

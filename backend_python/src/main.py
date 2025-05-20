@@ -50,7 +50,9 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 # Add CORS middleware with expanded configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    # Expanded allowed origins to include more development URLs and variations
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:3000",
+                   "http://localhost", "http://127.0.0.1"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
     allow_headers=["*"],
@@ -60,6 +62,7 @@ app.add_middleware(
 
 app.include_router(file_upload_router, prefix="/api")
 app.include_router(processing_router, prefix="/api")
+app.include_router(file_handler_router, prefix="/files")
 app.include_router(emergency_router)
 
 # Initialize Supabase client (using service role key for backend operations)
@@ -112,8 +115,21 @@ async def test_auth():
 # Global OPTIONS handler for any path to ensure preflight requests are handled
 @app.options("/{path:path}")
 async def options_route(request: Request, path: str):
+    # Get the origin from the request headers
+    origin = request.headers.get("Origin", "")
+
+    # Expanded allowed origins to match CORS middleware
+    allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000",
+                       "http://127.0.0.1:3000", "http://localhost", "http://127.0.0.1"]
+
+    # Set the appropriate origin in response headers
+    if origin in allowed_origins:
+        response_origin = origin
+    else:
+        response_origin = "http://localhost:5173"  # Default fallback
+
     headers = {
-        "Access-Control-Allow-Origin": request.headers.get("Origin", "http://localhost:5173"),
+        "Access-Control-Allow-Origin": response_origin,
         "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, HEAD",
         "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept, Origin, User-Agent, Cache-Control, Pragma",
         "Access-Control-Allow-Credentials": "true",
@@ -121,22 +137,6 @@ async def options_route(request: Request, path: str):
     }
     return JSONResponse(content={}, status_code=200, headers=headers)
 
-
-# WebSocket CORS handler
-@app.websocket_route("/api/ws/{path:path}")
-async def websocket_route(websocket: WebSocket, path: str):
-    # Extract the origin from the headers
-    origin = websocket.headers.get("origin", "")
-
-    # Check if the origin is allowed
-    allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
-    if origin and origin not in allowed_origins:
-        await websocket.close(code=1008, reason="Not allowed by CORS")
-        return
-
-    # Accept the connection
-    await websocket.accept()
-
-    # Close immediately - this is just a CORS handler
-    # The actual WebSocket endpoint is in processing.py
-    await websocket.close(code=1000, reason="WebSocket CORS check passed")
+# REMOVED: The global WebSocket CORS handler that was interfering with the actual WebSocket endpoint
+# This handler was accepting and immediately closing all WebSocket connections,
+# preventing the actual endpoint in processing.py from handling them properly.

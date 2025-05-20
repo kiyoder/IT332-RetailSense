@@ -8,9 +8,9 @@ import traceback
 from typing import Dict, List, Tuple, Optional, Any, Union
 
 try:
-    from .status_utils import save_status_safely
+    from .status_utils import save_status_safely, load_status
 except ImportError:
-    from src.status_utils import save_status_safely
+    from src.status_utils import save_status_safely, load_status
 
 from ultralytics import YOLO
 from deep_sort_realtime.deepsort_tracker import DeepSort
@@ -616,8 +616,27 @@ def get_processing_status(directory: str) -> Dict:
         The current status of the processing task
     """
     try:
-        from .status_utils import get_processing_status as get_status
-    except ImportError:
-        from src.status_utils import get_processing_status as get_status
-
-    return get_status(directory)
+        # Removed: from .status_utils import get_processing_status as get_status
+        status = load_status(directory) # Use load_status directly
+        if status is None:
+            # Handle case where status file doesn't exist or can't be loaded
+            return {
+                "status": "not_found",
+                "progress": 0,
+                "message": f"No processing status found for directory: {directory}"
+            }
+        return status
+    except Exception as e:
+        # Log the error and return an error status
+        import traceback
+        # Ensure logging is set up for this file if not already
+        import logging
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error getting processing status for {directory}: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return {
+            "status": "error",
+            "progress": 0,
+            "message": f"Failed to retrieve status: {str(e)}"
+        }

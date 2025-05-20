@@ -70,6 +70,7 @@ async def get_file(
 ):
     """
     Serve a file from the project data directory with proper CORS headers.
+    Only allows access if the directory belongs to the authenticated user.
     """
     try:
         # Log request details for debugging
@@ -87,16 +88,14 @@ async def get_file(
                 headers=headers
             )
 
-        # COMPLETELY BYPASS AUTHORIZATION - Always allow access during testing
-        # is_authorized = (
-        #         directory.startswith(current_user_id) or
-        #         current_user_id in directory or
-        #         os.environ.get("ENVIRONMENT") == "development" or
-        #         True  # Temporarily allow all access to fix 403 errors
-        # )
-
-        # Always authorize all requests
-        is_authorized = True
+        # Proper authorization check - only allow access if directory belongs to user
+        # A directory belongs to a user if:
+        # 1. It starts with the user's ID (prefixed directories)
+        # 2. The user's ID is contained within the directory name (for compatibility)
+        is_authorized = (
+                directory.startswith(current_user_id) or
+                current_user_id in directory
+        )
 
         # Log authorization status
         logger.info(f"Authorization status for GET {directory}/{filename}: {is_authorized}")
@@ -160,6 +159,7 @@ async def head_file(
 ):
     """
     Handle HEAD requests for files with proper CORS headers.
+    Only allows access if the directory belongs to the authenticated user.
     """
     try:
         # Log request details for debugging
@@ -173,16 +173,14 @@ async def head_file(
             headers = add_cors_headers(headers, request)
             return Response(status_code=404, headers=headers)
 
-        # COMPLETELY BYPASS AUTHORIZATION - Always allow access during testing
-        # is_authorized = (
-        #         directory.startswith(current_user_id) or
-        #         current_user_id in directory or
-        #         os.environ.get("ENVIRONMENT") == "development" or
-        #         True  # Temporarily allow all access to fix 403 errors
-        # )
-
-        # Always authorize all requests
-        is_authorized = True
+        # Proper authorization check - only allow access if directory belongs to user
+        # A directory belongs to a user if:
+        # 1. It starts with the user's ID (prefixed directories)
+        # 2. The user's ID is contained within the directory name (for compatibility)
+        is_authorized = (
+                directory.startswith(current_user_id) or
+                current_user_id in directory
+        )
 
         # Log authorization status
         logger.info(f"Authorization status for HEAD {directory}/{filename}: {is_authorized}")
@@ -221,3 +219,117 @@ async def head_file(
         headers = {}
         headers = add_cors_headers(headers, request)
         return Response(status_code=500, headers=headers)
+
+@router.get("/{directory}/{filename}")
+async def serve_file(
+    directory: str,
+    filename: str,
+    request: Request, # Keep request to pass to add_cors_headers
+    current_user_id: str = Depends(get_current_user_id) # Authenticate user
+):
+    """
+    Serve a static file (e.g., heatmap.png, analytics.csv) from a user's directory.
+    Requires authentication to ensure a user can only access their own files.
+    """
+    logger.info(f"Attempting to serve file: {filename} from directory: {directory} for user: {current_user_id}")
+
+    # Validate directory belongs to the current user
+    if not directory.startswith(current_user_id):
+        logger.warning(f"Access denied: User {current_user_id} attempted to access {directory}")
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Construct the file path
+    file_path = os.path.join(PROJECT_DATA_DIR, directory, filename)
+
+    # Check if the file exists
+    if not os.path.exists(file_path):
+        logger.warning(f"File not found: {file_path}")
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # Determine content type
+    content_type = "application/octet-stream"
+    if filename.endswith(".png"):
+        content_type = "image/png"
+    elif filename.endswith(".csv"):
+        content_type = "text/csv"
+    logger.debug(f"Serving {filename} with content type: {content_type}")
+
+    # Set CORS headers
+    headers = {}
+    headers = add_cors_headers(headers, request)
+
+    # Return the file as a FileResponse
+    response = FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type=content_type,
+        headers=headers # Pass headers directly to FileResponse
+    )
+    return response
+
+# Add a new endpoint to notify when a file is ready
+@router.post("/notify/{directory}/{filename}")
+async def notify_file_ready(
+        directory: str,
+        filename: str,
+        request: Request,
+        current_user_id: str = Depends(get_current_user_id)
+):
+    """
+    Notify that a file is ready for access.
+    This endpoint can be called by the processing system when a file is generated.
+    """
+    try:
+        # Log notification
+        logger.info(
+            f"File ready notification - Directory: {directory}, Filename: {filename}, User ID: {current_user_id}")
+
+        # Check if the user is authorized to notify for this directory
+        is_authorized = (
+                directory.startswith(current_user_id) or
+                current_user_id in directory
+        )
+
+        if not is_authorized:
+            logger.warning(f"Unauthorized notification attempt - Directory: {directory}, User ID: {current_user_id}")
+            headers = {}
+            headers = add_cors_headers(headers, request)
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Not authorized to notify for this directory"},
+                headers=headers
+            )
+
+        # Check if file actually exists
+        file_path = os.path.join(PROJECT_DATA_DIR, directory, filename)
+        if not os.path.exists(file_path):
+            logger.warning(f"Notification for non-existent file: {file_path}")
+            headers = {}
+            headers = add_cors_headers(headers, request)
+            return JSONResponse(
+                status_code=404,
+                content={"detail": f"File not found: {filename}"},
+                headers=headers
+            )
+
+        # File exists and user is authorized - send success response
+        headers = {}
+        headers = add_cors_headers(headers, request)
+        return JSONResponse(
+            status_code=200,
+            content={"detail": f"File {filename} is ready in directory {directory}"},
+            headers=headers
+        )
+
+    except Exception as e:
+        # Log the exception
+        logger.error(f"Error in file notification: {str(e)}")
+
+        # Ensure CORS headers are included even in case of errors
+        headers = {}
+        headers = add_cors_headers(headers, request)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Error in file notification: {str(e)}"},
+            headers=headers
+        )

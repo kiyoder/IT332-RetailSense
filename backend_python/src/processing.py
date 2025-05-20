@@ -1,14 +1,18 @@
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
-from typing import Dict
+from fastapi import APIRouter, Depends, HTTPException
+import logging
 
 try:
     from .auth import get_current_user_id
     from .vision_pipeline import start_processing, get_processing_status
-    from .websocket_manager import manager, get_user_id_from_token
+    from .status_utils import update_status, load_status
 except ImportError:
     from src.auth import get_current_user_id
     from src.vision_pipeline import start_processing, get_processing_status
-    from src.websocket_manager import manager, get_user_id_from_token
+    from src.status_utils import update_status, load_status
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -61,58 +65,3 @@ async def get_process_status(
     status = get_processing_status(directory)
 
     return status
-
-
-@router.websocket("/ws/process/status/{directory}")
-async def websocket_status(websocket: WebSocket, directory: str):
-    """
-    WebSocket endpoint for real-time status updates.
-
-    Args:
-        websocket: The WebSocket connection
-        directory: The directory name where the video is stored
-    """
-    # Get token from query parameters
-    token = websocket.query_params.get("token")
-    if not token:
-        await websocket.close(code=1008, reason="Missing authentication token")
-        return
-
-    try:
-        # Validate token and get user_id
-        user_id = await get_user_id_from_token(token)
-
-        # Validate directory belongs to the user
-        if not directory.startswith(user_id):
-            await websocket.close(code=1008, reason="Access denied")
-            return
-
-        # Accept connection and add to connection manager
-        await manager.connect(websocket, directory)
-
-        # Send initial status
-        status = get_processing_status(directory)
-        await websocket.send_text(status)
-
-        try:
-            # Keep connection alive and handle messages
-            while True:
-                # Wait for any message from client (like ping)
-                data = await websocket.receive_text()
-
-                # If client requests a status update, send it
-                if data == "get_status":
-                    status = get_processing_status(directory)
-                    await websocket.send_json(status)
-
-        except WebSocketDisconnect:
-            # Handle client disconnect
-            await manager.disconnect(websocket, directory)
-
-    except HTTPException as e:
-        # Handle authentication errors
-        await websocket.close(code=1008, reason=e.detail)
-    except Exception as e:
-        # Handle other errors
-        print(f"WebSocket error: {str(e)}")
-        await websocket.close(code=1011, reason="Server error")

@@ -18,8 +18,15 @@ from deep_sort_realtime.deepsort_tracker import DeepSort
 # Define the base directory for storing project data
 PROJECT_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "project_data")
 
+# Thread-safe lock for accessing shared resources
+processing_lock = threading.RLock()
+
 # Global dictionary to store processing tasks and their status
 processing_tasks = {}
+
+# Global dictionary to track the highest progress for each directory
+# This prevents progress from resetting to 0% after completion
+highest_progress = {}
 
 
 class VisionPipeline:
@@ -57,10 +64,30 @@ class VisionPipeline:
 
     def _save_status(self):
         """Save the current status to a JSON file using atomic operations."""
+        # Update the global highest progress tracker if this progress is higher
+        global highest_progress
+        current_progress = self.status.get("progress", 0)
+
+        with processing_lock:
+            highest_known = highest_progress.get(self.directory, 0)
+            if current_progress > highest_known:
+                highest_progress[self.directory] = current_progress
+
         save_status_safely(self.status_path, self.status)
 
     def _update_status(self, status: str, progress: int, message: str):
         """Update the processing status."""
+        # Get the highest progress value we've seen for this directory
+        global highest_progress
+
+        with processing_lock:
+            highest_known = highest_progress.get(self.directory, 0)
+
+            # Only allow progress to increase or stay the same, never decrease
+            # This prevents progress from resetting to 0% after completion
+            if progress < highest_known and status != "error":
+                progress = highest_known
+
         self.status = {
             "status": status,
             "progress": progress,
@@ -375,155 +402,145 @@ class VisionPipeline:
                     gaussian = np.exp(-((x_grid - x_idx) ** 2 + (y_grid - y_idx) ** 2) / (2 * sigma ** 2))
                     heatmap[y_min:y_max, x_min:x_max] += gaussian
 
-                except (ValueError, TypeError, IndexError) as e:
+                except Exception as e:
                     print(f"Error processing coordinate at frame {frame_idx}, index {coord_idx}: {str(e)}")
                     continue
 
-        # Normalize the heatmap
-        max_value = np.max(heatmap)
-        if max_value > 0:
-            heatmap = heatmap / max_value
+        # Normalize heatmap
+        if np.max(heatmap) > 0:
+            heatmap = heatmap / np.max(heatmap)
+
+        return heatmap
+
+    def _save_heatmap_image(self, heatmap: np.ndarray) -> str:
+        """
+        Save the heatmap as an image file.
+
+        Args:
+            heatmap: The heatmap as a numpy array
+
+        Returns:
+            Path to the saved heatmap image
+        """
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import LinearSegmentedColormap
 
         # Create a custom colormap (blue to red)
         colors = [(0, 0, 1), (0, 1, 1), (0, 1, 0), (1, 1, 0), (1, 0, 0)]
         cmap = LinearSegmentedColormap.from_list('custom_cmap', colors, N=256)
 
-        # Create the heatmap image
+        # Create figure and axis
         plt.figure(figsize=(10, 10))
         plt.imshow(heatmap, cmap=cmap)
         plt.colorbar(label='Normalized presence')
-        plt.title('People Presence Heatmap')
+        plt.title('Heatmap of Human Presence')
         plt.axis('off')
-        plt.tight_layout()
+
+        # Save the figure
         plt.savefig(self.heatmap_path, dpi=300, bbox_inches='tight')
         plt.close()
 
-        return heatmap
+        return self.heatmap_path
 
-    def _generate_hourly_counts(self, transformed_coords: List[List[Tuple[int, Tuple[float, float]]]]) -> None:
+    def _generate_hourly_counts(self, transformed_coords: List[List[Tuple[int, Tuple[float, float]]]],
+                                fps: float, start_time: float) -> str:
         """
-        Generate hourly people counts and save as CSV.
+        Generate hourly counts of people in the video.
 
         Args:
             transformed_coords: List of lists of transformed coordinates for each frame
+            fps: Frames per second of the video
+            start_time: Start time of the video in seconds since epoch
+
+        Returns:
+            Path to the saved hourly counts CSV file
         """
-        import pandas as pd
+        import csv
+        from collections import defaultdict
+        from datetime import datetime, timedelta
 
-        # Validate transformed_coords
-        if not isinstance(transformed_coords, list):
-            print("Error: transformed_coords is not a list")
-            return
+        # Initialize hourly counts
+        hourly_counts = defaultdict(int)
 
-        # Get video properties
-        cap = cv2.VideoCapture(self.video_path)
-        fps = float(cap.get(cv2.CAP_PROP_FPS))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        cap.release()
+        # Calculate the number of unique people in each hour
+        for frame_idx, frame_coords in enumerate(transformed_coords):
+            # Calculate the timestamp for this frame
+            frame_time = start_time + frame_idx / fps
+            frame_datetime = datetime.fromtimestamp(frame_time)
+            hour_key = frame_datetime.strftime('%Y-%m-%d %H:00:00')
 
-        # Calculate video duration in seconds
-        duration_seconds = total_frames / fps if fps > 0 else 0
+            # Count unique people in this frame
+            unique_people = set()
+            for coord_pair in frame_coords:
+                if isinstance(coord_pair, tuple) and len(coord_pair) == 2:
+                    track_id, _ = coord_pair
+                    unique_people.add(track_id)
 
-        # Create a DataFrame with hourly counts
-        hours = max(1, int(duration_seconds / 3600) + 1)
+            # Add to hourly count
+            hourly_counts[hour_key] += len(unique_people)
 
-        # Count unique track IDs per frame and aggregate by hour
-        hourly_data = []
+        # Save to CSV
+        with open(self.hourly_counts_path, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(['Hour', 'Count'])
+            for hour, count in sorted(hourly_counts.items()):
+                writer.writerow([hour, count])
 
-        for hour in range(hours):
-            start_frame = int(hour * 3600 * fps)
-            end_frame = int(min((hour + 1) * 3600 * fps, total_frames))
-
-            # Get frames in this hour, with bounds checking
-            start_frame = max(0, min(start_frame, len(transformed_coords) - 1))
-            end_frame = max(0, min(end_frame, len(transformed_coords)))
-
-            hour_frames = transformed_coords[start_frame:end_frame]
-
-            # Count unique track IDs in this hour
-            unique_ids = set()
-            for frame_coords in hour_frames:
-                if not isinstance(frame_coords, list):
-                    continue
-
-                for coord_pair in frame_coords:
-                    try:
-                        if not isinstance(coord_pair, tuple) or len(coord_pair) != 2:
-                            continue
-                        track_id, _ = coord_pair
-                        unique_ids.add(int(track_id))
-                    except Exception:
-                        continue
-
-            count = len(unique_ids)
-            hourly_data.append({
-                'Hour': hour + 1,
-                'People_Count': count
-            })
-
-        # Create DataFrame and save to CSV
-        df = pd.DataFrame(hourly_data)
-        df.to_csv(self.hourly_counts_path, index=False)
+        return self.hourly_counts_path
 
     def process_video(self):
-        """
-        Process the video to generate heatmap and analytics.
-        This method is designed to be run in a separate thread.
-        """
+        """Process the video to generate heatmap and analytics."""
         try:
             # Check if video file exists
             if not os.path.exists(self.video_path):
                 self._update_status("error", 0, f"Video file not found: {self.video_path}")
                 return
 
-            # Check if corner coordinates exist
-            if not os.path.exists(self.coords_path):
-                self._update_status("error", 0, f"Corner coordinates not found: {self.coords_path}")
-                return
-
             # Load corner coordinates
             self._update_status("processing", 10, "Loading corner coordinates")
-            coordinates = self._load_corner_coordinates()
-
-            # Calculate perspective transform
-            self._update_status("processing", 15, "Calculating perspective transform")
-            transform_matrix = self._get_perspective_transform(coordinates)
+            try:
+                coordinates = self._load_corner_coordinates()
+                transform_matrix = self._get_perspective_transform(coordinates)
+            except Exception as e:
+                self._update_status("error", 0, f"Error loading corner coordinates: {str(e)}")
+                return
 
             # Initialize detector
-            self._update_status("processing", 20, "Initializing detector")
+            self._update_status("processing", 15, "Initializing object detector")
             self._initialize_detector()
 
-            # Open the video
-            self._update_status("processing", 25, "Opening video file")
+            # Open video
+            self._update_status("processing", 20, "Opening video file")
             cap = cv2.VideoCapture(self.video_path)
-
             if not cap.isOpened():
-                self._update_status("error", 0, "Could not open video file")
+                self._update_status("error", 0, "Error opening video file")
                 return
 
             # Get video properties
-            self.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            fps = float(cap.get(cv2.CAP_PROP_FPS))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            self.total_frames = total_frames
 
-            # Store transformed coordinates for each frame
-            all_transformed_coords = []
+            # Initialize tracking data
+            transformed_coords = []
+            start_time = time.time()  # Use current time as start time
 
-            # Process the video
-            self._update_status("processing", 30, "Processing video frames")
-
+            # Process video frames
+            self._update_status("processing", 25, "Processing video frames")
+            frame_count = 0
             while True:
                 ret, frame = cap.read()
                 if not ret:
                     break
 
                 # Update progress
-                self.frame_count += 1
-                progress = min(90, 30 + int(60 * self.frame_count / self.total_frames))
-                if self.frame_count % 10 == 0:  # Update status every 10 frames
-                    self._update_status(
-                        "processing",
-                        progress,
-                        f"Processing frame {self.frame_count}/{self.total_frames}"
-                    )
+                frame_count += 1
+                self.frame_count = frame_count
+                progress = min(25 + int(70 * frame_count / total_frames), 95)
+                if frame_count % 10 == 0:  # Update status every 10 frames
+                    self._update_status("processing", progress, f"Processing frame {frame_count}/{total_frames}")
 
                 # Detect people
                 detections = self._detect_people(frame)
@@ -532,111 +549,121 @@ class VisionPipeline:
                 tracks = self._track_people(frame, detections)
 
                 # Transform coordinates
-                transformed_coords = self._transform_coordinates(tracks, transform_matrix)
+                frame_transformed_coords = self._transform_coordinates(tracks, transform_matrix)
+                transformed_coords.append(frame_transformed_coords)
 
-                # Validate transformed_coords before adding to all_transformed_coords
-                if not isinstance(transformed_coords, list):
-                    transformed_coords = []
-
-                all_transformed_coords.append(transformed_coords)
-
-            # Release the video
+            # Release video
             cap.release()
 
             # Generate heatmap
             self._update_status("processing", 95, "Generating heatmap")
-            self._generate_heatmap(all_transformed_coords)
+            heatmap = self._generate_heatmap(transformed_coords)
+            self._save_heatmap_image(heatmap)
 
             # Generate hourly counts
-            self._update_status("processing", 98, "Generating analytics")
-            self._generate_hourly_counts(all_transformed_coords)
+            self._update_status("processing", 98, "Generating hourly counts")
+            self._generate_hourly_counts(transformed_coords, fps, start_time)
 
-            # Complete
+            # Update status to completed
             self._update_status("completed", 100, "Processing completed")
 
         except Exception as e:
-            self._update_status("error", 0, f"Error processing video: {str(e)}")
-            import traceback
+            print(f"Error processing video: {str(e)}")
             traceback.print_exc()
-            raise
+            self._update_status("error", 0, f"Error processing video: {str(e)}")
 
 
-def start_processing(directory: str) -> Dict:
+def start_processing(directory: str) -> Dict[str, Any]:
     """
-    Start processing a video in a separate thread.
+    Start processing a video to generate heatmap and analytics.
 
     Args:
         directory: The directory name where the video is stored
 
     Returns:
-        The initial status of the processing task
+        The initial processing status
     """
-    # Check if the directory exists
-    user_dir = os.path.join(PROJECT_DATA_DIR, directory)
-    if not os.path.exists(user_dir):
-        return {
-            "status": "error",
-            "progress": 0,
-            "message": f"Directory not found: {directory}"
-        }
+    import logging
+    logger = logging.getLogger(__name__)
 
-    # Check if already processing
-    if directory in processing_tasks:
-        return {
-            "status": "already_processing",
-            "progress": 0,
-            "message": f"Already processing video in directory: {directory}"
-        }
+    # Use thread-safe locking to check and update processing_tasks
+    with processing_lock:
+        # Check if already processing
+        if directory in processing_tasks:
+            logger.info(f"Already processing video in directory: {directory} (in memory)")
+            return {"status": "processing", "progress": 0, "message": "Processing already in progress"}
 
-    # Create pipeline
-    pipeline = VisionPipeline(directory)
+        # Create pipeline
+        pipeline = VisionPipeline(directory)
+
+        # Add to processing tasks
+        processing_tasks[directory] = pipeline
 
     # Start processing in a separate thread
-    thread = threading.Thread(target=pipeline.process_video)
-    thread.daemon = True
+    def process_thread():
+        try:
+            pipeline.process_video()
+        finally:
+            # Clean up when processing is done
+            with processing_lock:
+                if directory in processing_tasks:
+                    del processing_tasks[directory]
+
+    thread = threading.Thread(target=process_thread)
+    thread.daemon = True  # Allow the thread to be terminated when the main program exits
     thread.start()
 
-    # Store the thread and pipeline
-    processing_tasks[directory] = {
-        "thread": thread,
-        "pipeline": pipeline
-    }
-
-    return pipeline.status
+    logger.info(f"Started new processing for {directory}")
+    return {"status": "processing", "progress": 0, "message": "Processing started"}
 
 
-def get_processing_status(directory: str) -> Dict:
+def get_processing_status(directory: str) -> Dict[str, Any]:
     """
-    Get the current status of a processing task.
+    Get the status of video processing.
 
     Args:
         directory: The directory name where the video is stored
 
     Returns:
-        The current status of the processing task
+        The current processing status
     """
-    try:
-        # Removed: from .status_utils import get_processing_status as get_status
-        status = load_status(directory) # Use load_status directly
-        if status is None:
-            # Handle case where status file doesn't exist or can't be loaded
-            return {
-                "status": "not_found",
-                "progress": 0,
-                "message": f"No processing status found for directory: {directory}"
-            }
-        return status
-    except Exception as e:
-        # Log the error and return an error status
-        import traceback
-        # Ensure logging is set up for this file if not already
-        import logging
-        logging.basicConfig(level=logging.INFO)
-        logger = logging.getLogger(__name__)
-        logger.error(f"Error getting processing status for {directory}: {e}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        return {
-            "status": "error",
-            "progress": 0,
-            "message": f"Failed to retrieve status: {str(e)}"
-        }
+    # Check if processing is active in memory
+    with processing_lock:
+        if directory in processing_tasks:
+            pipeline = processing_tasks[directory]
+            return pipeline.status
+
+    # If not in memory, try to load from file
+    status_file = os.path.join(PROJECT_DATA_DIR, directory, "status.json")
+    if os.path.exists(status_file):
+        try:
+            with open(status_file, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error loading status from file: {str(e)}")
+
+    # Default status if not found
+    return {"status": "not_started", "progress": 0, "message": "Processing not started"}
+
+
+def is_processing_active(directory: str) -> Dict[str, Any]:
+    """
+    Check if processing is currently active for a directory.
+
+    Args:
+        directory: The directory name to check
+
+    Returns:
+        Dictionary with active status and current status information
+    """
+    with processing_lock:
+        is_active = directory in processing_tasks
+
+    status = get_processing_status(directory)
+
+    return {
+        "is_active": is_active,
+        "status": status["status"],
+        "progress": status["progress"],
+        "message": status["message"]
+    }

@@ -32,8 +32,14 @@ export default function HeatmapPage() {
   const processingCompletedRef = useRef(false); // Guard for completed polling
   const processInitiatedRef = useRef(false); // POST /api/process only once per run
   const pollingIntervalRef = useRef(null);
-  // New: Only allow one fetchProcessingStatus() at a time
+  // Only allow one fetchProcessingStatus() at a time
   const isFetchingRef = useRef(false);
+  // Store the last progress value to prevent resetting to 0
+  const lastProgressRef = useRef(0);
+  // Flag to track if initial POST has been sent
+  const initialPostSentRef = useRef(false);
+  // Flag to track if we've checked active status
+  const activeStatusCheckedRef = useRef(false);
 
   // Polling interval in ms
   const POLLING_INTERVAL = 2000;
@@ -86,6 +92,93 @@ export default function HeatmapPage() {
     }
   };
 
+  // NEW: Check if processing is active using the dedicated endpoint
+  const checkProcessingActive = async () => {
+    try {
+      const headers = await getAuthHeader();
+      const activeUrl = `${import.meta.env.VITE_API_URL}/api/process/active/${directory}`;
+
+      addDebugLog("GET /api/process/active to check if processing is active...");
+      const response = await axios.get(activeUrl, { headers });
+
+      addDebugLog(`Active check response: ${JSON.stringify(response.data)}`);
+
+      // Update state based on active status response
+      const { is_active, status, progress, message } = response.data;
+
+      if (is_active) {
+        setProcessingStarted(true);
+        initialPostSentRef.current = true;
+        processInitiatedRef.current = true;
+
+        if (status === 'completed') {
+          processingCompletedRef.current = true;
+          setProcessing(false);
+        } else if (status === 'processing') {
+          setProcessing(true);
+        }
+
+        setStatusMessage(message);
+        setProgress(progress);
+        lastProgressRef.current = progress;
+      }
+
+      return response.data;
+    } catch (err) {
+      console.error('Error checking if processing is active:', err);
+      addDebugLog(`Active check error: ${err.response?.data?.detail || err.message}`);
+      return null;
+    }
+  };
+
+  // Function to initiate processing with POST request
+  const initiateProcessing = async () => {
+    if (initialPostSentRef.current) {
+      addDebugLog("POST already sent this session, skipping duplicate POST");
+      return null;
+    }
+
+    try {
+      const headers = await getAuthHeader();
+      const processUrl = `${import.meta.env.VITE_API_URL}/api/process/${directory}`;
+
+      addDebugLog("Sending initial POST /api/process to start processing...");
+      const response = await axios.post(processUrl, {}, { headers });
+
+      // Mark that we've sent the POST request for this session
+      initialPostSentRef.current = true;
+      processInitiatedRef.current = true;
+      setProcessingStarted(true);
+
+      addDebugLog(`Initial POST response: ${JSON.stringify(response.data)}`);
+      return response;
+    } catch (err) {
+      console.error('Error initiating processing:', err);
+      setError(err.response?.data?.detail || 'Failed to initiate processing.');
+      addDebugLog(`Initiate processing error: ${err.response?.data?.detail || err.message}`);
+      return null;
+    }
+  };
+
+  // Function to check processing status with GET request
+  const checkProcessingStatus = async () => {
+    try {
+      const headers = await getAuthHeader();
+      const statusUrl = `${import.meta.env.VITE_API_URL}/api/process/status/${directory}`;
+
+      addDebugLog("GET /api/process/status to poll status...");
+      const response = await axios.get(statusUrl, { headers });
+
+      addDebugLog(`GET status response: ${JSON.stringify(response.data)}`);
+      return response;
+    } catch (err) {
+      console.error('Error checking processing status:', err);
+      setError(err.response?.data?.detail || 'Failed to check processing status.');
+      addDebugLog(`Check status error: ${err.response?.data?.detail || err.message}`);
+      return null;
+    }
+  };
+
   // Fetches initial status or initiates processing (with atomic guard)
   const fetchProcessingStatus = async () => {
     // Prevent concurrent calls
@@ -93,36 +186,75 @@ export default function HeatmapPage() {
       addDebugLog("fetchProcessingStatus: Skipped (already in flight)");
       return;
     }
+
+    // Set fetching flag to prevent concurrent calls
     isFetchingRef.current = true;
 
     try {
       if (processingCompletedRef.current) {
         addDebugLog("Processing already completed, skipping status fetch.");
+        isFetchingRef.current = false;
         return;
       }
-      addDebugLog(`fetchProcessingStatus: processInitiatedRef.current=${processInitiatedRef.current}, processingStarted=${processingStarted}`);
+
+      addDebugLog(`fetchProcessingStatus: initialPostSent=${initialPostSentRef.current}, processingStarted=${processingStarted}`);
       setLoading(true);
-      const headers = await getAuthHeader();
-      const statusUrl = `${import.meta.env.VITE_API_URL}/api/process/status/${directory}`;
-      const processUrl = `${import.meta.env.VITE_API_URL}/api/process/${directory}`;
 
       let response;
-      // Only POST if not POSTed this run and not started
-      if (!processInitiatedRef.current && !processingStarted) {
-        processInitiatedRef.current = true;
-        addDebugLog("POST /api/process to initiate processing...");
-        response = await axios.post(processUrl, {}, { headers });
-        setProcessingStarted(true);
-        addDebugLog(`POST response: ${JSON.stringify(response.data)}`);
+
+      // First, check if processing is already active (if we haven't checked yet)
+      if (!activeStatusCheckedRef.current) {
+        const activeStatus = await checkProcessingActive();
+        activeStatusCheckedRef.current = true;
+
+        if (activeStatus && activeStatus.is_active) {
+          // If processing is already active, no need to send POST
+          addDebugLog("Processing already active, skipping POST request");
+
+          // If processing is completed, fetch results
+          if (activeStatus.status === 'completed') {
+            processingCompletedRef.current = true;
+            fetchHeatmapAndAnalytics();
+          }
+
+          isFetchingRef.current = false;
+          setLoading(false);
+          return;
+        }
+      }
+
+      // Only send POST if we haven't sent one yet this session and processing hasn't started
+      if (!initialPostSentRef.current && !processingStarted) {
+        response = await initiateProcessing();
+        if (!response) {
+          // If POST failed, don't continue
+          isFetchingRef.current = false;
+          setLoading(false);
+          return;
+        }
       } else {
-        addDebugLog("GET /api/process/status to poll status...");
-        response = await axios.get(statusUrl, { headers });
-        addDebugLog(`GET status response: ${JSON.stringify(response.data)}`);
+        // Otherwise just check status with GET
+        response = await checkProcessingStatus();
+        if (!response) {
+          // If GET failed, don't continue
+          isFetchingRef.current = false;
+          setLoading(false);
+          return;
+        }
       }
 
       const data = response.data;
       setStatusMessage(data.message || 'Fetching status...');
-      setProgress(data.progress || 0);
+
+      // Only update progress if it's greater than the last value or if we're not completed
+      // This prevents the progress from resetting to 0 after completion
+      const newProgress = data.progress || 0;
+      if (!processingCompletedRef.current || newProgress >= lastProgressRef.current) {
+        setProgress(newProgress);
+        lastProgressRef.current = newProgress;
+      } else {
+        addDebugLog(`Ignoring progress update: ${newProgress} < ${lastProgressRef.current} (completed=${processingCompletedRef.current})`);
+      }
 
       if (data.status === 'completed') {
         setProcessing(false);
@@ -176,15 +308,40 @@ export default function HeatmapPage() {
     processInitiatedRef.current = false;
     processingCompletedRef.current = false;
     isFetchingRef.current = false;
+    lastProgressRef.current = 0;
+    initialPostSentRef.current = false;
+    activeStatusCheckedRef.current = false;
     setProcessingStarted(false);
 
-    // Immediately fetch status (which might initiate POST if not already started)
-    fetchProcessingStatus();
+    // First check if processing is active, then set up polling
+    checkProcessingActive().then(activeStatus => {
+      activeStatusCheckedRef.current = true;
 
-    // Set up polling
-    pollingIntervalRef.current = setInterval(() => {
-      fetchProcessingStatus();
-    }, POLLING_INTERVAL);
+      if (activeStatus && activeStatus.is_active) {
+        // If processing is already active, update state
+        initialPostSentRef.current = true;
+        processInitiatedRef.current = true;
+        setProcessingStarted(true);
+
+        if (activeStatus.status === 'completed') {
+          processingCompletedRef.current = true;
+          fetchHeatmapAndAnalytics();
+        } else {
+          // Set up polling for ongoing processing
+          pollingIntervalRef.current = setInterval(() => {
+            fetchProcessingStatus();
+          }, POLLING_INTERVAL);
+        }
+      } else {
+        // If not active, fetch status (which might initiate POST)
+        fetchProcessingStatus();
+
+        // Set up polling
+        pollingIntervalRef.current = setInterval(() => {
+          fetchProcessingStatus();
+        }, POLLING_INTERVAL);
+      }
+    });
 
     // Cleanup on unmount
     return () => {
@@ -198,7 +355,22 @@ export default function HeatmapPage() {
 
   const refreshStatus = () => {
     addDebugLog("Manual status refresh initiated.");
-    fetchProcessingStatus();
+    // Don't send POST on manual refresh, just check status
+    checkProcessingStatus().then(response => {
+      if (response) {
+        const data = response.data;
+        setStatusMessage(data.message || 'Fetching status...');
+
+        // Update progress with the same rules
+        const newProgress = data.progress || 0;
+        if (!processingCompletedRef.current || newProgress >= lastProgressRef.current) {
+          setProgress(newProgress);
+          lastProgressRef.current = newProgress;
+        }
+
+        setLastUpdated(new Date());
+      }
+    });
   };
 
   const restartProcessing = async () => {
@@ -213,6 +385,9 @@ export default function HeatmapPage() {
     processingCompletedRef.current = false;
     processInitiatedRef.current = false;
     isFetchingRef.current = false;
+    lastProgressRef.current = 0;
+    initialPostSentRef.current = false;
+    activeStatusCheckedRef.current = false;
     setProcessingStarted(false);
 
     // Clear existing polling if any
@@ -225,10 +400,11 @@ export default function HeatmapPage() {
       const processUrl = `${import.meta.env.VITE_API_URL}/api/process/${directory}`;
       addDebugLog(`POST /api/process/${directory} for restart initiated.`);
       const response = await axios.post(processUrl, {}, { headers });
+      // Mark that we've sent the POST for this restart
+      initialPostSentRef.current = true;
       addDebugLog(`Restart Processing API call response: ${JSON.stringify(response.data)}`);
 
       // After restart, start polling again
-      fetchProcessingStatus();
       pollingIntervalRef.current = setInterval(() => {
         fetchProcessingStatus();
       }, POLLING_INTERVAL);
@@ -318,28 +494,32 @@ export default function HeatmapPage() {
                       </div>
                   )}
 
-                  {/* Action buttons */}
-                  <div className="flex flex-wrap gap-2">
-                    <Button onClick={refreshStatus} variant="outline">
+                  {/* Action Buttons */}
+                  <div className="flex flex-wrap gap-2 mt-4">
+                    <Button onClick={refreshStatus} variant="outline" disabled={processingCompletedRef.current}>
                       Refresh Status
                     </Button>
                     <Button onClick={restartProcessing} variant="outline">
                       Restart Processing
                     </Button>
-                    <Button onClick={toggleDebugLogging} variant="outline" size="sm" className="ml-auto">
-                      {debugLoggingEnabledRef.current ? 'Disable Logs' : 'Enable Logs'}
+                    <Button onClick={toggleDebugLogging} variant="outline" className="ml-auto">
+                      {debugLoggingEnabledRef.current ? 'Disable Debug Logs' : 'Enable Debug Logs'}
                     </Button>
                   </div>
 
-                  {/* Debug logs (collapsible) */}
-                  <details className="mt-4">
-                    <summary className="cursor-pointer text-sm text-gray-500">Debug Logs</summary>
-                    <div className="mt-2 p-2 bg-gray-100 rounded text-xs font-mono h-40 overflow-y-auto">
-                      {debugLogs.map((log, index) => (
-                          <div key={index} className="pb-1">{log}</div>
-                      ))}
-                    </div>
-                  </details>
+                  {/* Debug Logs */}
+                  {debugLoggingEnabledRef.current && debugLogs.length > 0 && (
+                      <div className="mt-8 p-4 border rounded-lg bg-gray-50">
+                        <h3 className="text-lg font-semibold mb-2">Debug Logs</h3>
+                        <div className="max-h-60 overflow-y-auto text-xs font-mono">
+                          {debugLogs.map((log, index) => (
+                              <div key={index} className="py-1 border-b border-gray-200">
+                                {log}
+                              </div>
+                          ))}
+                        </div>
+                      </div>
+                  )}
                 </div>
             )}
           </CardContent>

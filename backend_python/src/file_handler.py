@@ -127,14 +127,29 @@ async def get_file(
 
         logger.info(f"Serving file: {file_path}")
 
+        # Determine content type and disposition
+        content_type = "application/octet-stream"
+        if filename.endswith(".png"):
+            content_type = "image/png"
+        elif filename.endswith(".csv"):
+            content_type = "text/csv"
+
         # Set CORS headers for successful response
-        headers = {}
+        headers = {
+            "Content-Type": content_type,
+        }
+
+        # Add Content-Disposition header for CSV files to force download
+        if filename.endswith(".csv"):
+            headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+
         headers = add_cors_headers(headers, request)
 
         return FileResponse(
             path=file_path,
             headers=headers,
-            filename=filename
+            filename=filename,
+            media_type=content_type
         )
     except Exception as e:
         # Log the exception
@@ -202,12 +217,23 @@ async def head_file(
 
         logger.info(f"File exists: {file_path}")
 
+        # Determine content type
+        content_type = "application/octet-stream"
+        if filename.endswith(".png"):
+            content_type = "image/png"
+        elif filename.endswith(".csv"):
+            content_type = "text/csv"
+
         # Set CORS headers and content info
         headers = {
             "Content-Length": str(os.path.getsize(file_path)),
-            "Content-Type": "image/png" if filename.endswith(".png") else "text/csv" if filename.endswith(
-                ".csv") else "application/octet-stream"
+            "Content-Type": content_type
         }
+
+        # Add Content-Disposition header for CSV files to force download
+        if filename.endswith(".csv"):
+            headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+
         headers = add_cors_headers(headers, request)
 
         return Response(status_code=200, headers=headers)
@@ -220,52 +246,6 @@ async def head_file(
         headers = add_cors_headers(headers, request)
         return Response(status_code=500, headers=headers)
 
-@router.get("/{directory}/{filename}")
-async def serve_file(
-    directory: str,
-    filename: str,
-    request: Request, # Keep request to pass to add_cors_headers
-    current_user_id: str = Depends(get_current_user_id) # Authenticate user
-):
-    """
-    Serve a static file (e.g., heatmap.png, analytics.csv) from a user's directory.
-    Requires authentication to ensure a user can only access their own files.
-    """
-    logger.info(f"Attempting to serve file: {filename} from directory: {directory} for user: {current_user_id}")
-
-    # Validate directory belongs to the current user
-    if not directory.startswith(current_user_id):
-        logger.warning(f"Access denied: User {current_user_id} attempted to access {directory}")
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    # Construct the file path
-    file_path = os.path.join(PROJECT_DATA_DIR, directory, filename)
-
-    # Check if the file exists
-    if not os.path.exists(file_path):
-        logger.warning(f"File not found: {file_path}")
-        raise HTTPException(status_code=404, detail="File not found")
-
-    # Determine content type
-    content_type = "application/octet-stream"
-    if filename.endswith(".png"):
-        content_type = "image/png"
-    elif filename.endswith(".csv"):
-        content_type = "text/csv"
-    logger.debug(f"Serving {filename} with content type: {content_type}")
-
-    # Set CORS headers
-    headers = {}
-    headers = add_cors_headers(headers, request)
-
-    # Return the file as a FileResponse
-    response = FileResponse(
-        path=file_path,
-        filename=filename,
-        media_type=content_type,
-        headers=headers # Pass headers directly to FileResponse
-    )
-    return response
 
 # Add a new endpoint to notify when a file is ready
 @router.post("/notify/{directory}/{filename}")

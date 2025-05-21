@@ -3,12 +3,12 @@ import logging
 
 try:
     from .auth import get_current_user_id
-    from .vision_pipeline import start_processing, get_processing_status, is_processing_active
-    from .status_utils import update_status, load_status
+    from .vision_pipeline import start_processing
+    from .status_utils import get_consolidated_status
 except ImportError:
     from src.auth import get_current_user_id
-    from src.vision_pipeline import start_processing, get_processing_status, is_processing_active
-    from src.status_utils import update_status, load_status
+    from src.vision_pipeline import start_processing
+    from src.status_utils import get_consolidated_status
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -48,45 +48,22 @@ async def get_process_status(
         current_user_id: str = Depends(get_current_user_id)
 ):
     """
-    Get the status of video processing.
+    Get consolidated status information including active state and current status.
+
+    This endpoint replaces the separate /status and /active endpoints.
 
     Args:
         directory: The directory name where the video is stored
         current_user_id: The ID of the authenticated user
 
     Returns:
-        JSON response with the processing status
+        JSON response with consolidated status information
     """
     # Validate directory belongs to the current user
     if not directory.startswith(current_user_id):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Get status
-    status = get_processing_status(directory)
+    # Get consolidated status
+    status = get_consolidated_status(directory)
 
     return status
-
-
-@router.get("/process/active/{directory}")
-async def check_processing_active(
-        directory: str,
-        current_user_id: str = Depends(get_current_user_id)
-):
-    """
-    Check if processing is currently active for a directory.
-
-    Args:
-        directory: The directory name where the video is stored
-        current_user_id: The ID of the authenticated user
-
-    Returns:
-        JSON response with active status and current status information
-    """
-    # Validate directory belongs to the current user
-    if not directory.startswith(current_user_id):
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    # Check if processing is active
-    result = is_processing_active(directory)
-
-    return result

@@ -51,6 +51,9 @@ class VisionPipeline:
             "progress": 0,
             "message": "Initializing vision pipeline"
         }
+
+        # Only save status once during initialization
+        # This prevents the triple status save at startup
         self._save_status()
 
         # Load models
@@ -61,6 +64,10 @@ class VisionPipeline:
         self.tracks = []
         self.frame_count = 0
         self.total_frames = 0
+
+        # Progress tracking optimization
+        self.last_progress_update = 0
+        self.progress_update_threshold = 2  # Only update progress when it changes by at least 2%
 
     def _save_status(self):
         """Save the current status to a JSON file using atomic operations."""
@@ -76,7 +83,7 @@ class VisionPipeline:
         save_status_safely(self.status_path, self.status)
 
     def _update_status(self, status: str, progress: int, message: str):
-        """Update the processing status."""
+        """Update the processing status with throttling for progress updates."""
         # Get the highest progress value we've seen for this directory
         global highest_progress
 
@@ -88,12 +95,38 @@ class VisionPipeline:
             if progress < highest_known and status != "error":
                 progress = highest_known
 
-        self.status = {
-            "status": status,
-            "progress": progress,
-            "message": message
-        }
-        self._save_status()
+        # Check if the progress change is significant enough to warrant an update
+        # Always update on status change or if message changes
+        if (status != self.status.get("status") or
+                message != self.status.get("message") or
+                abs(progress - self.last_progress_update) >= self.progress_update_threshold):
+            self.status = {
+                "status": status,
+                "progress": progress,
+                "message": message
+            }
+            self._save_status()
+            self.last_progress_update = progress
+
+    def _check_output_files_exist(self) -> Tuple[bool, bool, str]:
+        """
+        Check if both output files (heatmap and hourly counts) exist.
+
+        Returns:
+            Tuple of (heatmap_exists, hourly_counts_exists, error_message)
+        """
+        heatmap_exists = os.path.exists(self.heatmap_path)
+        hourly_counts_exists = os.path.exists(self.hourly_counts_path)
+
+        error_message = ""
+        if not heatmap_exists and not hourly_counts_exists:
+            error_message = "Both heatmap and hourly counts files are missing"
+        elif not heatmap_exists:
+            error_message = "Heatmap file is missing"
+        elif not hourly_counts_exists:
+            error_message = "Hourly counts file is missing"
+
+        return heatmap_exists, hourly_counts_exists, error_message
 
     def _load_corner_coordinates(self) -> List[Dict[str, int]]:
         """Load the corner coordinates from the JSON file."""
@@ -383,7 +416,11 @@ class VisionPipeline:
                     # Extract and convert coordinates to float
                     x, y = float(coords[0]), float(coords[1])
 
-                    # Clip coordinates to valid range
+                    # Skip if coordinates are outside the grid
+                    if x < 0 or x >= 500 or y < 0 or y >= 500:
+                        continue
+
+                    # Convert to integer indices for the grid
                     x_idx = int(round(np.clip(x, 0, 499)))
                     y_idx = int(round(np.clip(y, 0, 499)))
 
@@ -399,105 +436,116 @@ class VisionPipeline:
 
                     # Use vectorized operations for Gaussian calculation
                     y_grid, x_grid = np.mgrid[y_min:y_max, x_min:x_max]
-                    gaussian = np.exp(-((x_grid - x_idx) ** 2 + (y_grid - y_idx) ** 2) / (2 * sigma ** 2))
-                    heatmap[y_min:y_max, x_min:x_max] += gaussian
+                    g = np.exp(-((x_grid - x_idx) ** 2 + (y_grid - y_idx) ** 2) / (2 * sigma ** 2))
+                    heatmap[y_min:y_max, x_min:x_max] += g
 
                 except Exception as e:
                     print(f"Error processing coordinate at frame {frame_idx}, index {coord_idx}: {str(e)}")
                     continue
 
-        # Normalize heatmap
-        if np.max(heatmap) > 0:
-            heatmap = heatmap / np.max(heatmap)
-
         return heatmap
 
-    def _save_heatmap_image(self, heatmap: np.ndarray) -> str:
+    def _save_heatmap_image(self, heatmap: np.ndarray) -> None:
         """
         Save the heatmap as an image file.
 
         Args:
             heatmap: The heatmap as a numpy array
-
-        Returns:
-            Path to the saved heatmap image
         """
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
         from matplotlib.colors import LinearSegmentedColormap
 
-        # Create a custom colormap (blue to red)
-        colors = [(0, 0, 1), (0, 1, 1), (0, 1, 0), (1, 1, 0), (1, 0, 0)]
-        cmap = LinearSegmentedColormap.from_list('custom_cmap', colors, N=256)
+        # Create a custom colormap (red-yellow-green-blue)
+        colors = [(0, 0, 1), (0, 1, 0), (1, 1, 0), (1, 0, 0)]  # Blue -> Green -> Yellow -> Red
+        cmap = LinearSegmentedColormap.from_list("custom_heatmap", colors, N=256)
 
         # Create figure and axis
         plt.figure(figsize=(10, 10))
         plt.imshow(heatmap, cmap=cmap)
-        plt.colorbar(label='Normalized presence')
-        plt.title('Heatmap of Human Presence')
-        plt.axis('off')
+        plt.colorbar(label='Density')
+        plt.title('Foot Traffic Heatmap')
+        plt.axis('off')  # Hide axes
 
-        # Save the figure
+        # Save figure
         plt.savefig(self.heatmap_path, dpi=300, bbox_inches='tight')
         plt.close()
 
-        return self.heatmap_path
-
-    def _generate_hourly_counts(self, transformed_coords: List[List[Tuple[int, Tuple[float, float]]]],
-                                fps: float, start_time: float) -> str:
+    def _generate_hourly_counts(self, transformed_coords: List[List[Tuple[int, Tuple[float, float]]]], fps: float,
+                                start_time: float) -> None:
         """
         Generate hourly counts of people in the video.
 
         Args:
             transformed_coords: List of lists of transformed coordinates for each frame
             fps: Frames per second of the video
-            start_time: Start time of the video in seconds since epoch
-
-        Returns:
-            Path to the saved hourly counts CSV file
+            start_time: Start time of the video (Unix timestamp)
         """
         import csv
         from collections import defaultdict
         from datetime import datetime, timedelta
 
-        # Initialize hourly counts
-        hourly_counts = defaultdict(int)
+        # Calculate frame timestamps
+        frame_times = []
+        for i in range(len(transformed_coords)):
+            frame_time = start_time + (i / fps)
+            frame_times.append(frame_time)
 
-        # Calculate the number of unique people in each hour
-        for frame_idx, frame_coords in enumerate(transformed_coords):
-            # Calculate the timestamp for this frame
-            frame_time = start_time + frame_idx / fps
+        # Count unique people per hour
+        hourly_counts = defaultdict(set)
+        for i, frame_coords in enumerate(transformed_coords):
+            frame_time = frame_times[i]
             frame_datetime = datetime.fromtimestamp(frame_time)
-            hour_key = frame_datetime.strftime('%Y-%m-%d %H:00:00')
+            hour_key = frame_datetime.strftime("%Y-%m-%d %H:00:00")
 
-            # Count unique people in this frame
-            unique_people = set()
-            for coord_pair in frame_coords:
-                if isinstance(coord_pair, tuple) and len(coord_pair) == 2:
-                    track_id, _ = coord_pair
-                    unique_people.add(track_id)
+            for track_id, _ in frame_coords:
+                hourly_counts[hour_key].add(track_id)
 
-            # Add to hourly count
-            hourly_counts[hour_key] += len(unique_people)
+        # Convert to counts
+        hourly_count_values = {hour: len(track_ids) for hour, track_ids in hourly_counts.items()}
 
-        # Save to CSV
+        # Sort by hour
+        sorted_hours = sorted(hourly_count_values.keys())
+
+        # Write to CSV
         with open(self.hourly_counts_path, 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
-            writer.writerow(['Hour', 'Count'])
-            for hour, count in sorted(hourly_counts.items()):
-                writer.writerow([hour, count])
+            writer.writerow(['Hour', 'Unique People Count'])
+            for hour in sorted_hours:
+                writer.writerow([hour, hourly_count_values[hour]])
 
-        return self.hourly_counts_path
+    def _update_status_after_file_check(self, max_retries=5, retry_delay=1.0):
+        """
+        Check if output files exist and update status accordingly.
+        Includes retry logic to handle potential file system delays.
 
-    def process_video(self):
+        Args:
+            max_retries: Maximum number of retries for file existence check
+            retry_delay: Delay between retries in seconds
+        """
+        for attempt in range(max_retries):
+            # Check if files exist
+            heatmap_exists, hourly_counts_exists, error_message = self._check_output_files_exist()
+
+            if heatmap_exists and hourly_counts_exists:
+                # Both files exist, update status to completed
+                self._update_status("completed", 100, "Processing completed successfully")
+                print(f"Both files verified to exist, status updated to completed")
+                return True
+            else:
+                # One or both files are missing
+                print(f"Attempt {attempt + 1}/{max_retries}: {error_message}, retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+
+        # If we get here, files still don't exist after all retries
+        self._update_status("error", 98, f"Processing incomplete: {error_message}")
+        print(f"Files still missing after {max_retries} attempts: {error_message}")
+        return False
+
+    def process_video(self) -> None:
         """Process the video to generate heatmap and analytics."""
         try:
-            # Check if video file exists
-            if not os.path.exists(self.video_path):
-                self._update_status("error", 0, f"Video file not found: {self.video_path}")
-                return
-
             # Load corner coordinates
             self._update_status("processing", 10, "Loading corner coordinates")
             try:
@@ -530,6 +578,9 @@ class VisionPipeline:
             # Process video frames
             self._update_status("processing", 25, "Processing video frames")
             frame_count = 0
+            last_status_update_frame = 0
+            update_interval = max(1, total_frames // 50)  # Update status ~50 times during processing
+
             while True:
                 ret, frame = cap.read()
                 if not ret:
@@ -539,8 +590,11 @@ class VisionPipeline:
                 frame_count += 1
                 self.frame_count = frame_count
                 progress = min(25 + int(70 * frame_count / total_frames), 95)
-                if frame_count % 10 == 0:  # Update status every 10 frames
+
+                # Only update status periodically to reduce file writes
+                if frame_count - last_status_update_frame >= update_interval:
                     self._update_status("processing", progress, f"Processing frame {frame_count}/{total_frames}")
+                    last_status_update_frame = frame_count
 
                 # Detect people
                 detections = self._detect_people(frame)
@@ -564,8 +618,8 @@ class VisionPipeline:
             self._update_status("processing", 98, "Generating hourly counts")
             self._generate_hourly_counts(transformed_coords, fps, start_time)
 
-            # Update status to completed
-            self._update_status("completed", 100, "Processing completed")
+            # Ensure files are fully written and update status with retry logic
+            self._update_status_after_file_check()
 
         except Exception as e:
             print(f"Error processing video: {str(e)}")
@@ -667,3 +721,72 @@ def is_processing_active(directory: str) -> Dict[str, Any]:
         "progress": status["progress"],
         "message": status["message"]
     }
+
+
+def check_and_update_status(directory: str) -> Dict[str, Any]:
+    """
+    Check if output files exist and update status if needed.
+    This function can be called externally to fix stuck status.
+
+    Args:
+        directory: The directory name to check
+
+    Returns:
+        Updated status dictionary
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # Get file paths
+    user_dir = os.path.join(PROJECT_DATA_DIR, directory)
+    status_path = os.path.join(user_dir, "status.json")
+    heatmap_path = os.path.join(user_dir, "heatmap.png")
+    hourly_counts_path = os.path.join(user_dir, "hourly_counts.csv")
+
+    # Load current status
+    current_status = get_processing_status(directory)
+
+    # If status is already completed or error, don't change it
+    if current_status.get("status") in ["completed", "error"]:
+        return current_status
+
+    # Check if files exist
+    heatmap_exists = os.path.exists(heatmap_path)
+    hourly_counts_exists = os.path.exists(hourly_counts_path)
+
+    logger.info(f"Checking files for {directory}: heatmap={heatmap_exists}, hourly_counts={hourly_counts_exists}")
+
+    # If both files exist but status is not completed, update it
+    if heatmap_exists and hourly_counts_exists:
+        updated_status = {
+            "status": "completed",
+            "progress": 100,
+            "message": "Processing completed successfully"
+        }
+
+        # Save the updated status
+        save_status_safely(status_path, updated_status)
+        logger.info(f"Updated status for {directory} to completed")
+
+        return updated_status
+    else:
+        # Files are missing, set error status
+        error_message = ""
+        if not heatmap_exists and not hourly_counts_exists:
+            error_message = "Both heatmap and hourly counts files are missing"
+        elif not heatmap_exists:
+            error_message = "Heatmap file is missing"
+        else:
+            error_message = "Hourly counts file is missing"
+
+        updated_status = {
+            "status": "error",
+            "progress": current_status.get("progress", 0),
+            "message": f"Processing incomplete: {error_message}"
+        }
+
+        # Save the updated status
+        save_status_safely(status_path, updated_status)
+        logger.info(f"Updated status for {directory} to error: {error_message}")
+
+        return updated_status

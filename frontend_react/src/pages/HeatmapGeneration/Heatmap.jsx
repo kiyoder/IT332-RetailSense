@@ -13,6 +13,16 @@ const PROCESS_STATE = {
   ERROR: 'error'
 };
 
+// Debounce function to prevent rapid-fire API calls
+function debounce(func, wait) {
+  let timeout;
+  return function(...args) {
+    const context = this;
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func.apply(context, args), wait);
+  };
+}
+
 export default function HeatmapPage() {
   const { directory } = useParams();
   const { getSession } = useAuth();
@@ -34,6 +44,7 @@ export default function HeatmapPage() {
   // Results state
   const [heatmapUrl, setHeatmapUrl] = useState(null);
   const [analyticsUrl, setAnalyticsUrl] = useState(null);
+  const [filesVerified, setFilesVerified] = useState(false);
 
   // Fetching state - separate from process state
   const [isFetchingResults, setIsFetchingResults] = useState(false);
@@ -44,12 +55,20 @@ export default function HeatmapPage() {
 
   // Polling interval in ms
   const POLLING_INTERVAL = 2000;
+  // Debounce delay in ms
+  const DEBOUNCE_DELAY = 500;
 
   // Use a ref to track the polling interval
   const pollingIntervalRef = useRef(null);
 
   // Flag to track if we've already tried to fetch the heatmap
   const heatmapFetchAttemptedRef = useRef(false);
+
+  // Flag to track if polling has been stopped due to completion
+  const pollingStoppedRef = useRef(false);
+
+  // Flag to track if files have been verified successfully
+  const filesVerifiedRef = useRef(false);
 
   // Add debug log (simplified)
   const addDebugLog = useCallback((message) => {
@@ -74,8 +93,75 @@ export default function HeatmapPage() {
       addDebugLog("Clearing polling interval");
       clearInterval(pollingIntervalRef.current);
       pollingIntervalRef.current = null;
+
+      // Mark polling as stopped
+      pollingStoppedRef.current = true;
     }
   }, [addDebugLog]);
+
+  // Verify both files exist
+  const verifyFiles = useCallback(async () => {
+    // Skip verification if already verified successfully
+    if (filesVerifiedRef.current) {
+      addDebugLog("Files already verified, skipping verification");
+      return true;
+    }
+
+    try {
+      const headers = await getAuthHeader();
+
+      // Check if both files exist
+      const heatmapPromise = axios.head(
+          `${import.meta.env.VITE_API_URL}/files/${directory}/heatmap.png`,
+          { headers }
+      );
+
+      const analyticsPromise = axios.head(
+          `${import.meta.env.VITE_API_URL}/files/${directory}/hourly_counts.csv`,
+          { headers }
+      );
+
+      // Wait for both checks to complete
+      const results = await Promise.allSettled([heatmapPromise, analyticsPromise]);
+
+      // Check if both files exist
+      const heatmapExists = results[0].status === 'fulfilled';
+      const analyticsExists = results[1].status === 'fulfilled';
+
+      if (heatmapExists && analyticsExists) {
+        addDebugLog("Both files verified to exist");
+        setFilesVerified(true);
+        filesVerifiedRef.current = true;
+
+        // Stop polling immediately when files are verified
+        clearPolling();
+        pollingStoppedRef.current = true;
+        addDebugLog("Files verified - permanently stopping all polling");
+
+        return true;
+      } else {
+        // Set appropriate error message
+        if (!heatmapExists && !analyticsExists) {
+          setError('Both heatmap and analytics files are missing.');
+        } else if (!heatmapExists) {
+          setError('Heatmap file is missing.');
+        } else {
+          setError('Analytics file is missing.');
+        }
+        addDebugLog(`File verification failed: ${!heatmapExists ? 'Heatmap missing' : ''} ${!analyticsExists ? 'Analytics missing' : ''}`);
+        setFilesVerified(false);
+        filesVerifiedRef.current = false;
+        return false;
+      }
+    } catch (err) {
+      console.error('Error verifying files:', err);
+      setError('Failed to verify required files.');
+      addDebugLog(`Error verifying files: ${err.message}`);
+      setFilesVerified(false);
+      filesVerifiedRef.current = false;
+      return false;
+    }
+  }, [directory, getAuthHeader, addDebugLog, clearPolling]);
 
   // Fetch heatmap and analytics data
   const fetchHeatmapAndAnalytics = useCallback(async () => {
@@ -89,6 +175,13 @@ export default function HeatmapPage() {
     heatmapFetchAttemptedRef.current = true;
 
     try {
+      // First verify both files exist
+      const filesExist = await verifyFiles();
+
+      if (!filesExist) {
+        throw new Error('Required files are missing');
+      }
+
       const headers = await getAuthHeader();
 
       // Fetch heatmap image
@@ -105,8 +198,13 @@ export default function HeatmapPage() {
       // Fetch analytics CSV
       const analyticsResponse = await axios.get(
           `${import.meta.env.VITE_API_URL}/files/${directory}/hourly_counts.csv`,
-          { headers }
+          {
+            headers,
+            responseType: 'blob'
+          }
       );
+
+      // Create URL from blob with proper MIME type
       const analyticsBlob = new Blob([analyticsResponse.data], { type: 'text/csv' });
       setAnalyticsUrl(URL.createObjectURL(analyticsBlob));
       addDebugLog("Analytics data fetched successfully.");
@@ -115,7 +213,7 @@ export default function HeatmapPage() {
       clearPolling();
     } catch (err) {
       console.error('Error fetching heatmap or analytics:', err);
-      setError(err.response?.data?.detail || 'Failed to load heatmap or analytics.');
+      setError(err.response?.data?.detail || err.message || 'Failed to load heatmap or analytics.');
       addDebugLog(`Error fetching heatmap/analytics: ${err.response?.data?.detail || err.message}`);
 
       // Reset the flag so we can try again
@@ -123,12 +221,19 @@ export default function HeatmapPage() {
     } finally {
       setIsFetchingResults(false);
     }
-  }, [directory, getAuthHeader, heatmapUrl, isFetchingResults, clearPolling, addDebugLog]);
+  }, [directory, getAuthHeader, heatmapUrl, isFetchingResults, clearPolling, addDebugLog, verifyFiles]);
 
-  // Unified function to check processing status
+  // Unified function to check processing status - using the consolidated endpoint
   const checkProcessingStatus = useCallback(async () => {
-    // Don't check if we're already in completed state and have the heatmap
-    if (processState === PROCESS_STATE.COMPLETED && heatmapUrl) {
+    // Don't check if polling has been stopped due to completion
+    if (pollingStoppedRef.current) {
+      addDebugLog("Skipping status check - polling has been stopped");
+      return;
+    }
+
+    // Don't check if we're already in completed state and files are verified
+    if (processState === PROCESS_STATE.COMPLETED && filesVerifiedRef.current) {
+      addDebugLog("Stopping polling - process is completed and files are verified");
       clearPolling();
       return;
     }
@@ -148,17 +253,33 @@ export default function HeatmapPage() {
 
       // Update state based on status
       if (data.status === 'completed') {
-        setProcessState(PROCESS_STATE.COMPLETED);
+        // Verify both files exist before setting completed state
+        const filesExist = await verifyFiles();
 
-        // Stop polling immediately
-        clearPolling();
+        if (filesExist) {
+          setProcessState(PROCESS_STATE.COMPLETED);
 
-        // Fetch results if we don't have them yet and haven't attempted
-        if (!heatmapUrl && !isFetchingResults && !heatmapFetchAttemptedRef.current) {
-          fetchHeatmapAndAnalytics();
+          // Stop polling immediately and permanently
+          clearPolling();
+          pollingStoppedRef.current = true;
+          addDebugLog("Process completed and files verified - permanently stopping all polling");
+
+          // Fetch results if we don't have them yet and haven't attempted
+          if (!heatmapUrl && !isFetchingResults && !heatmapFetchAttemptedRef.current) {
+            fetchHeatmapAndAnalytics();
+          }
+        } else {
+          // Backend says completed but files are missing
+          setProcessState(PROCESS_STATE.ERROR);
+          setError('Processing completed but required files are missing.');
+          clearPolling();
         }
       } else if (data.status === 'processing' || data.status === 'pending' || data.status === 'waiting') {
         setProcessState(PROCESS_STATE.PROCESSING);
+      } else if (data.status === 'error') {
+        setProcessState(PROCESS_STATE.ERROR);
+        setError(data.message || 'An error occurred during processing.');
+        clearPolling();
       } else {
         setProcessState(PROCESS_STATE.ERROR);
         setError(data.message || 'Unknown processing status.');
@@ -169,7 +290,19 @@ export default function HeatmapPage() {
       setError(err.response?.data?.detail || 'Failed to check processing status.');
       addDebugLog(`Status check error: ${err.response?.data?.detail || err.message}`);
     }
-  }, [directory, getAuthHeader, processState, heatmapUrl, isFetchingResults, clearPolling, fetchHeatmapAndAnalytics, addDebugLog]);
+  }, [directory, getAuthHeader, processState, heatmapUrl, isFetchingResults, clearPolling, fetchHeatmapAndAnalytics, addDebugLog, verifyFiles]);
+
+  // Create a debounced version of the status check function
+  const debouncedCheckStatus = useCallback(
+      debounce((force = false) => {
+        // Skip if polling has been stopped, unless forced
+        if (pollingStoppedRef.current && !force) {
+          return;
+        }
+        checkProcessingStatus();
+      }, DEBOUNCE_DELAY),
+      [checkProcessingStatus, DEBOUNCE_DELAY]
+  );
 
   // Function to initiate processing
   const initiateProcessing = useCallback(async () => {
@@ -177,12 +310,17 @@ export default function HeatmapPage() {
       // Clear any existing polling
       clearPolling();
 
+      // Reset polling stopped flag
+      pollingStoppedRef.current = false;
+      filesVerifiedRef.current = false;
+
       // Reset state
       setProcessState(PROCESS_STATE.PROCESSING);
       setProgress(0);
       setStatusMessage('Initiating processing...');
       setHeatmapUrl(null);
       setAnalyticsUrl(null);
+      setFilesVerified(false);
       setError('');
       heatmapFetchAttemptedRef.current = false;
 
@@ -205,63 +343,99 @@ export default function HeatmapPage() {
 
   // Start polling function
   const startPolling = useCallback(() => {
+    // Don't start polling if it's been stopped due to completion
+    if (pollingStoppedRef.current) {
+      addDebugLog("Not starting polling - polling has been permanently stopped");
+      return;
+    }
+
     // Clear any existing polling first
     clearPolling();
+
+    // Reset the polling stopped flag
+    pollingStoppedRef.current = false;
 
     // Initial check immediately
     checkProcessingStatus();
 
     // Set up interval for polling
-    pollingIntervalRef.current = setInterval(checkProcessingStatus, POLLING_INTERVAL);
-    addDebugLog("Started polling for status updates.");
-  }, [clearPolling, checkProcessingStatus, addDebugLog]);
+    pollingIntervalRef.current = setInterval(() => {
+      // Only continue polling if not stopped and files not verified
+      if (!pollingStoppedRef.current && !filesVerifiedRef.current) {
+        debouncedCheckStatus();
+      } else {
+        // If polling has been stopped or files verified, clear the interval
+        clearPolling();
+      }
+    }, POLLING_INTERVAL);
 
-  // Check if processing is already active on component mount
+    addDebugLog("Started polling for status updates.");
+  }, [clearPolling, checkProcessingStatus, debouncedCheckStatus, addDebugLog]);
+
+  // Check initial status on component mount - using the consolidated endpoint
   const checkInitialStatus = useCallback(async () => {
     try {
       const headers = await getAuthHeader();
-      const activeUrl = `${import.meta.env.VITE_API_URL}/api/process/active/${directory}`;
+      const statusUrl = `${import.meta.env.VITE_API_URL}/api/process/status/${directory}`;
 
-      addDebugLog("Checking if processing is already active...");
-      const response = await axios.get(activeUrl, { headers });
+      addDebugLog("Checking initial status...");
+      const response = await axios.get(statusUrl, { headers });
       const { is_active, status, progress, message } = response.data;
 
-      addDebugLog(`Active check response: ${JSON.stringify(response.data)}`);
+      addDebugLog(`Initial status response: ${JSON.stringify(response.data)}`);
 
-      if (is_active) {
-        setStatusMessage(message || 'Processing...');
-        setProgress(progress || 0);
+      setStatusMessage(message || 'Processing...');
+      setProgress(progress || 0);
 
-        if (status === 'completed') {
+      if (status === 'completed') {
+        // Verify both files exist before setting completed state
+        const filesExist = await verifyFiles();
+
+        if (filesExist) {
           setProcessState(PROCESS_STATE.COMPLETED);
+          // Mark polling as permanently stopped
+          pollingStoppedRef.current = true;
+          addDebugLog("Initial status is completed and files verified - permanently stopping all polling");
           // We'll fetch the heatmap in the useEffect that watches processState
         } else {
-          setProcessState(PROCESS_STATE.PROCESSING);
-          // Start polling for updates
+          // Backend says completed but files are missing
+          setProcessState(PROCESS_STATE.ERROR);
+          setError('Processing marked as completed but required files are missing.');
+        }
+      } else if (status === 'processing' || status === 'pending' || status === 'waiting') {
+        setProcessState(PROCESS_STATE.PROCESSING);
+        // Start polling for updates if processing is active
+        if (is_active) {
           startPolling();
         }
+      } else if (status === 'error') {
+        setProcessState(PROCESS_STATE.ERROR);
+        setError(message || 'An error occurred during processing.');
       } else {
         // If not active, we're in idle state
         setProcessState(PROCESS_STATE.IDLE);
       }
     } catch (err) {
-      console.error('Error checking if processing is active:', err);
-      addDebugLog(`Active check error: ${err.response?.data?.detail || err.message}`);
+      console.error('Error checking initial status:', err);
+      addDebugLog(`Initial status check error: ${err.response?.data?.detail || err.message}`);
       // Don't set error state here, just continue with idle state
       setProcessState(PROCESS_STATE.IDLE);
     }
-  }, [directory, getAuthHeader, startPolling, addDebugLog]);
+  }, [directory, getAuthHeader, startPolling, addDebugLog, verifyFiles]);
 
   // Effect to fetch heatmap when process state changes to COMPLETED
   useEffect(() => {
-    if (processState === PROCESS_STATE.COMPLETED && !heatmapUrl && !isFetchingResults && !heatmapFetchAttemptedRef.current) {
-      addDebugLog("Process completed, fetching heatmap and analytics...");
-      fetchHeatmapAndAnalytics();
-    }
-
-    // Stop polling when we're not in PROCESSING state
-    if (processState !== PROCESS_STATE.PROCESSING) {
+    if (processState === PROCESS_STATE.COMPLETED) {
+      // Always ensure polling is stopped when state is COMPLETED
       clearPolling();
+      pollingStoppedRef.current = true;
+      addDebugLog("Process state changed to COMPLETED - permanently stopping all polling");
+
+      // Fetch heatmap if needed
+      if (!heatmapUrl && !isFetchingResults && !heatmapFetchAttemptedRef.current) {
+        addDebugLog("Process completed, fetching heatmap and analytics...");
+        fetchHeatmapAndAnalytics();
+      }
     }
   }, [processState, heatmapUrl, isFetchingResults, fetchHeatmapAndAnalytics, clearPolling, addDebugLog]);
 
@@ -292,7 +466,7 @@ export default function HeatmapPage() {
   // Manual refresh handler
   const refreshStatus = () => {
     addDebugLog("Manual status refresh initiated.");
-    checkProcessingStatus();
+    debouncedCheckStatus(true); // Force check even if polling is stopped
   };
 
   // Restart processing handler
@@ -310,13 +484,28 @@ export default function HeatmapPage() {
   // Download analytics handler
   const downloadAnalytics = () => {
     if (analyticsUrl) {
-      const link = document.createElement('a');
-      link.href = analyticsUrl;
-      link.setAttribute('download', `analytics_${directory}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      addDebugLog("Analytics download initiated.");
+      try {
+        addDebugLog("Analytics download initiated.");
+
+        // Create a direct download link with proper attributes
+        const link = document.createElement('a');
+        link.href = analyticsUrl;
+        link.setAttribute('download', `analytics_${directory}.csv`);
+        link.setAttribute('type', 'text/csv');
+
+        // Append to body, click, and remove
+        document.body.appendChild(link);
+        link.click();
+
+        // Small timeout before removing to ensure download starts
+        setTimeout(() => {
+          document.body.removeChild(link);
+        }, 100);
+      } catch (err) {
+        console.error('Error downloading analytics:', err);
+        setError(`Download failed: ${err.message}`);
+        addDebugLog(`Analytics download error: ${err.message}`);
+      }
     } else {
       addDebugLog("No analytics URL available to download.");
       setError("Analytics data not available for download.");
@@ -350,7 +539,7 @@ export default function HeatmapPage() {
             )}
 
             {/* Heatmap Display */}
-            {heatmapUrl ? (
+            {heatmapUrl && filesVerified ? (
                 <div className="mb-4">
                   <h3 className="text-xl font-semibold mb-2">Generated Heatmap</h3>
                   <img src={heatmapUrl} alt="Heatmap" className="max-w-full h-auto rounded-lg shadow-lg" />
@@ -370,71 +559,52 @@ export default function HeatmapPage() {
                         </div>
                       </>
                   )}
-
-                  {processState === PROCESS_STATE.COMPLETED && isLoading && (
-                      <p className="mt-2">Loading heatmap results...</p>
-                  )}
-
-                  {processState === PROCESS_STATE.COMPLETED && !isLoading && !heatmapUrl && (
-                      <div className="mt-2">
-                        <p className="text-amber-600">Heatmap not found. Please try restarting the process.</p>
-                        <Button onClick={fetchHeatmapAndAnalytics} className="mt-2">
-                          Retry Loading Heatmap
-                        </Button>
-                      </div>
-                  )}
-
-                  {processState === PROCESS_STATE.IDLE && (
-                      <div className="mt-4">
-                        <Button onClick={startProcessing}>Start Processing</Button>
-                      </div>
-                  )}
-                </div>
-            )}
-
-            {/* Analytics Download */}
-            {heatmapUrl && analyticsUrl && (
-                <div className="mb-4 p-4 border rounded-lg bg-green-50 text-green-700 flex justify-between items-center">
-                  <div>
-                    <h3 className="text-xl font-semibold mb-2">Analytics Data</h3>
-                    <p>Analytics data is ready for download.</p>
-                  </div>
-                  <div>
-                    <Button onClick={downloadAnalytics} variant="outline">
-                      Download Analytics Data
-                    </Button>
-                  </div>
                 </div>
             )}
 
             {/* Action Buttons */}
             <div className="flex flex-wrap gap-2 mt-4">
+              {/* Download Analytics Button - Only show if analytics URL is available */}
+              {analyticsUrl && filesVerified && (
+                  <Button onClick={downloadAnalytics} className="bg-green-600 hover:bg-green-700">
+                    Download Analytics Data
+                  </Button>
+              )}
+
+              {/* Process/Restart Button */}
+              {processState === PROCESS_STATE.IDLE ? (
+                  <Button onClick={startProcessing} className="bg-blue-600 hover:bg-blue-700">
+                    Start Processing
+                  </Button>
+              ) : processState === PROCESS_STATE.ERROR || processState === PROCESS_STATE.COMPLETED ? (
+                  <Button onClick={restartProcessing} className="bg-yellow-600 hover:bg-yellow-700">
+                    Restart Processing
+                  </Button>
+              ) : null}
+
+              {/* Refresh Status Button - Only show during processing */}
               {processState === PROCESS_STATE.PROCESSING && (
-                  <Button onClick={refreshStatus} variant="outline">
+                  <Button onClick={refreshStatus} className="bg-gray-600 hover:bg-gray-700">
                     Refresh Status
                   </Button>
               )}
 
-              {(processState === PROCESS_STATE.COMPLETED || processState === PROCESS_STATE.ERROR) && (
-                  <Button onClick={restartProcessing} variant="outline">
-                    Restart Processing
-                  </Button>
-              )}
-
-              <Button onClick={toggleDebugLogging} variant="outline" className="ml-auto">
+              {/* Debug Toggle Button */}
+              <Button
+                  onClick={toggleDebugLogging}
+                  className="bg-purple-600 hover:bg-purple-700"
+              >
                 {debugLoggingEnabled ? 'Disable Debug Logs' : 'Enable Debug Logs'}
               </Button>
             </div>
 
             {/* Debug Logs */}
             {debugLoggingEnabled && debugLogs.length > 0 && (
-                <div className="mt-8 p-4 border rounded-lg bg-gray-50">
+                <div className="mt-8 p-4 border rounded bg-gray-50">
                   <h3 className="text-lg font-semibold mb-2">Debug Logs</h3>
                   <div className="max-h-60 overflow-y-auto text-xs font-mono">
                     {debugLogs.map((log, index) => (
-                        <div key={index} className="py-1 border-b border-gray-200">
-                          {log}
-                        </div>
+                        <div key={index} className="mb-1">{log}</div>
                     ))}
                   </div>
                 </div>

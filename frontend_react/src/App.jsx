@@ -18,7 +18,10 @@ import AnalyticsPage from "./pages/Dashboard/Analytics.jsx";
 import ReportsPage from "./pages/ReportHistory/Reports.jsx";
 import SettingsPage from "./pages/UserManagement/Settings.jsx";
 import FloorplanPage from "./pages/HeatmapGeneration/Floorplan.jsx";
+import FloorplanConfigPage from "./pages/Floorplan_Configuration/FloorplanConfig.jsx";
+import FloorplanEditorPage from "./pages/FloorplanEditor/FloorplanEditor.jsx"; // Import the editor page
 import FileUploadPage from "./pages/HeatmapGeneration/FileUpload.jsx";
+import CompletedHeatmapsPage from "./pages/CompletedSessions/CompletedHeatmapsPage.jsx"; // Import the new page
 
 
 function AppContent() {
@@ -45,7 +48,11 @@ function AppContent() {
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/floorplan/:directory" element={<FloorplanPage />} />
-            <Route path="/upload" element={< FileUploadPage/>} />
+          <Route path="/floorplaneditor" element={<FloorplanEditorPage />} /> {/* New route for general editor access */}
+          <Route path="/floorplaneditor/:directory" element={<FloorplanEditorPage />} /> {/* New route for specific project editor */}
+          <Route path="/configure-floorplan" element={<FloorplanConfigPage />} />
+          <Route path="/upload" element={< FileUploadPage/>} />
+          <Route path="/completed-heatmaps" element={<CompletedHeatmapsPage />} /> {/* New route */}
         </Route>
       </Route>
 
@@ -71,4 +78,3 @@ function App() {
 }
 
 export default App;
-

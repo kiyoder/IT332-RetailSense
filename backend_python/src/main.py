@@ -14,12 +14,18 @@ try:
     from .processing import router as processing_router
     from .file_handler import router as file_handler_router
     from .emergency_file_handler import router as emergency_router
+    from .floorplan_management import router as floorplan_router # ADDED
+    from .user_uploads import router as user_uploads_router # ADDED
+    from .activity_summary import router as activity_summary_router # NEW
 except ImportError:
     from src.auth import get_current_user_id
     from src.file_upload import router as file_upload_router
     from src.processing import router as processing_router
     from src.file_handler import router as file_handler_router
     from src.emergency_file_handler import router as emergency_router
+    from src.floorplan_management import router as floorplan_router # ADDED
+    from src.user_uploads import router as user_uploads_router # ADDED
+    from src.activity_summary import router as activity_summary_router # NEW
 
 # Load environment variables from .env file
 load_dotenv()
@@ -64,6 +70,9 @@ app.include_router(file_upload_router, prefix="/api")
 app.include_router(processing_router, prefix="/api")
 app.include_router(file_handler_router, prefix="/files")
 app.include_router(emergency_router)
+app.include_router(floorplan_router, prefix="/api") # ADDED
+app.include_router(user_uploads_router) # Ensure this line is present and uses the correct router variable
+app.include_router(activity_summary_router) # NEW - Added without prefix as paths in router are absolute
 
 # Initialize Supabase client (using service role key for backend operations)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)

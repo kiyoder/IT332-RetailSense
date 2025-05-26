@@ -1,4 +1,4 @@
-import React, {createContext, useContext, useState, useEffect, useMemo} from 'react';
+import React, {createContext, useContext, useState, useEffect, useMemo, useCallback} from 'react';
 import { createAuthApiClient} from "@/AuthApiClient.jsx";
 import { supabase } from './supabaseClient'; // Ensure this path is correct
 
@@ -17,7 +17,7 @@ export const AuthProvider = ({ children }) => {
     });
   }, []);
 
-  const fetchUserProfile = async (userId) => {
+  const fetchUserProfile = useCallback(async (userId) => {
     if (!userId) {
       setProfile(null);
       // console.log('AuthContext: fetchUserProfile - No userId provided, setting profile to null.');
@@ -46,13 +46,13 @@ export const AuthProvider = ({ children }) => {
     } finally {
       // console.log(`AuthContext: fetchUserProfile - FINALLY for user ID: ${userId}`);
     }
-  };
+  }, []); // Empty dependency array: function reference is stable
 
-  const getSession = async () => {
+  const getSession = useCallback(async () => {
     const { data: { session } } = await supabase.auth.getSession();
     setSession(session);
     return session;
-  };
+  }, []); // Empty dependency array: function reference is stable
 
   useEffect(() => {
     let isMounted = true;
@@ -132,4 +132,3 @@ export const useAuth = () => {
   }
   return context;
 };
-

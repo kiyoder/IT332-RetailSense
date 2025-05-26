@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from "@/components/ui";
 import { useAuth } from "@/AuthContext.jsx";
 import axios from 'axios';
+import { Activity, Download, RefreshCw, Play, Bug, AlertCircle, BarChart2 } from 'lucide-react';
 
 export default function HeatmapPage() {
   const { directory } = useParams();
@@ -15,6 +16,9 @@ export default function HeatmapPage() {
   const [heatmapUrl, setHeatmapUrl] = useState(null);
   const [analyticsUrl, setAnalyticsUrl] = useState(null);
   const [error, setError] = useState('');
+  const [zoneActivity, setZoneActivity] = useState(null); // To store zone_activity.json
+  const [floorplanLayout, setFloorplanLayout] = useState(null); // To store floorplan_layout.json (zone definitions)
+  const imageRef = useRef(null); // For getting displayed image dimensions for SVG overlay
   const [statusMessage, setStatusMessage] = useState(currentView === 'initializing' ? 'Initializing...' : ''); // Initialize status message
   const [lastUpdated, setLastUpdated] = useState(new Date()); // Keep for display
   const [debugLogs, setDebugLogs] = useState([]);
@@ -59,6 +63,8 @@ export default function HeatmapPage() {
   const fetchHeatmapAndAnalytics = async () => {
     addDebugLog("Fetching heatmap and analytics data...");
     setCurrentView('results_loading'); // Ensure view is set correctly before fetch
+    let overallSuccess = false; 
+    let localHeatmapObjectUrl = null; 
     try {
       const headers = await getAuthHeader();
       if (!headers) {
@@ -72,9 +78,22 @@ export default function HeatmapPage() {
           `${import.meta.env.VITE_API_URL}/files/${directory}/heatmap.png`,
           { headers, responseType: 'blob' }
       );
-      setHeatmapUrl(URL.createObjectURL(heatmapResponse.data));
-      addDebugLog("Heatmap fetched successfully.");
+      addDebugLog(`Heatmap fetch status: ${heatmapResponse.status}. Content-Type: ${heatmapResponse.headers['content-type']}. Size: ${heatmapResponse.data?.size}`);
 
+      if (heatmapResponse.data && heatmapResponse.data.size > 0 && heatmapResponse.data.type.startsWith('image/')) {
+        const objectURLForHeatmap = URL.createObjectURL(heatmapResponse.data);
+        if (objectURLForHeatmap) {
+          localHeatmapObjectUrl = objectURLForHeatmap;
+          setHeatmapUrl(objectURLForHeatmap);
+          addDebugLog("Heatmap object URL created and set successfully.");
+        } else {
+          addDebugLog("URL.createObjectURL for heatmap returned null/falsy. The fetched data might be invalid.");
+          throw new Error("Failed to create a displayable URL for the heatmap image. The image data might be corrupted or invalid.");
+        }
+      } else {
+        addDebugLog(`Heatmap data is invalid or empty. Size: ${heatmapResponse.data?.size}, Type: ${heatmapResponse.data?.type}`);
+        throw new Error("Received invalid or empty data for the heatmap image from the server.");
+      }
       const analyticsResponse = await axios.get(
           `${import.meta.env.VITE_API_URL}/files/${directory}/hourly_counts.csv`,
           { headers }
@@ -84,13 +103,54 @@ export default function HeatmapPage() {
       setAnalyticsUrl(URL.createObjectURL(analyticsBlob));
       addDebugLog("Analytics data fetched successfully.");
 
-      setCurrentView('results'); // Transition to results view on success
+      // Fetch zone activity data (from video-specific directory)
+      try {
+        const zoneActivityResponse = await axios.get(
+          `${import.meta.env.VITE_API_URL}/files/${directory}/zone_activity.json`,
+          { headers }
+        );
+        setZoneActivity(zoneActivityResponse.data);
+        addDebugLog("Zone activity data fetched successfully.");
+      } catch (zoneErr) {
+        console.warn("Could not fetch zone activity data:", zoneErr.message);
+        setZoneActivity({}); // Set to empty if not found, so UI can handle it
+        addDebugLog(`Warning: Zone activity data not found or error: ${zoneErr.message}`);
+      }
+
+      // Fetch floorplan layout (for zone definitions, from user's central assets)
+      // User ID is the first part of the directory string (e.g., "userid_timestamp")
+      const userIdForLayout = directory.split('_')[0];
+      try {
+        const floorplanLayoutResponse = await axios.get(
+          `${import.meta.env.VITE_API_URL}/api/floorplan/${userIdForLayout}`,
+          { headers }
+        );
+        setFloorplanLayout(floorplanLayoutResponse.data);
+        addDebugLog("Floorplan layout (for zones) fetched successfully.");
+      } catch (layoutErr) {
+        console.warn("Could not fetch floorplan layout:", layoutErr.message);
+        setFloorplanLayout({ zones: [], aisles: [] }); // Set to empty if not found
+        addDebugLog(`Warning: Floorplan layout not found or error: ${layoutErr.message}`);
+      }
+
+      overallSuccess = true; 
+
     } catch (err) {
       console.error('Error fetching heatmap or analytics:', err);
-      const errorMsg = err.response?.data?.detail || 'Failed to load heatmap or analytics.';
+      const errorMsg = err.response?.data?.detail || err.message || 'Failed to load heatmap or analytics.';
       setError(errorMsg);
-      setCurrentView('error'); // Transition to error view on failure
       addDebugLog(`Error fetching heatmap/analytics: ${errorMsg}`);
+    }
+    finally {
+      if (overallSuccess && localHeatmapObjectUrl) { 
+        setCurrentView('results');
+      } else if (!overallSuccess) { 
+        setCurrentView('error'); // Ensure it's error if not already set
+      } else if (overallSuccess && !localHeatmapObjectUrl) {
+        addDebugLog("Overall fetch sequence completed, but heatmap object URL was not generated. Setting view to error.");
+        setError("Processing completed, but the heatmap image could not be loaded or was invalid (local URL generation failed).");
+        setCurrentView('error');
+      }
     }
   };
 
@@ -111,6 +171,8 @@ export default function HeatmapPage() {
       setCurrentView('initializing'); // Ensure view is set for new initialization
       setHeatmapUrl(null);
       setAnalyticsUrl(null);
+      setZoneActivity(null);
+      setFloorplanLayout(null);
       setError('');
       setProgress(0);
       setStatusMessage('Initializing for new directory...'); // Or a generic 'Initializing...'
@@ -128,7 +190,7 @@ export default function HeatmapPage() {
     } else {
       // Directory is the same. useEffect re-ran.
       // If already completed and results are shown, do nothing more.
-      if (processingCompletedRef.current && heatmapUrl && analyticsUrl) {
+      if (processingCompletedRef.current && heatmapUrl /* && analyticsUrl - other results can be optional for just showing heatmap */) {
         addDebugLog("useEffect: Same directory, completed and results shown. No action.");
         if(currentView !== 'results') setCurrentView('results'); // Ensure view is correct
         return;
@@ -168,6 +230,7 @@ export default function HeatmapPage() {
         if (!headers) {
             addDebugLog("Aborting initializeAndPoll: No auth headers.");
             // getAuthHeader already set error view
+            isInitializingEffectRunningRef.current = false; // Reset flag
             return; // Stop the process if auth failed
         }
 
@@ -189,8 +252,9 @@ export default function HeatmapPage() {
           addDebugLog("initializeAndPoll: Already completed. Fetching results.");
           processingCompletedRef.current = true;
           // Transition to results_loading *before* fetching
-          setCurrentView('results_loading');
+          // setCurrentView('results_loading'); // fetchHeatmapAndAnalytics will set this
           fetchHeatmapAndAnalytics();
+          isInitializingEffectRunningRef.current = false; // Reset flag
           return; // No polling needed
         }
 
@@ -200,6 +264,7 @@ export default function HeatmapPage() {
           setCurrentView('processing');
           // Start polling
           pollingIntervalRef.current = setInterval(pollStatus, POLLING_INTERVAL);
+          isInitializingEffectRunningRef.current = false; // Reset flag
           return;
         }
 
@@ -225,7 +290,7 @@ export default function HeatmapPage() {
           addDebugLog("initializeAndPoll: Completed immediately after POST. Fetching results.");
           processingCompletedRef.current = true;
           // Transition to results_loading *before* fetching
-          setCurrentView('results_loading');
+          // setCurrentView('results_loading'); // fetchHeatmapAndAnalytics will set this
           fetchHeatmapAndAnalytics();
         } else if (postData.status === 'error') {
           setError(postData.message || 'Failed to start processing.');
@@ -258,6 +323,8 @@ export default function HeatmapPage() {
       // isInitializingEffectRunningRef.current is reset in the finally block of initializeAndPoll.
       // If the effect cleans up before initializeAndPoll completes (e.g., unmount),
       // this ensures the flag is reset for any potential future re-renders if the component remounts.
+      // No, we should reset it here too, in case initializeAndPoll never reaches its finally block due to early return.
+      isInitializingEffectRunningRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [directory, getSession]); // Depend on directory and getSession
@@ -276,6 +343,7 @@ export default function HeatmapPage() {
        if (!headers) {
           addDebugLog("Aborting pollStatus: No auth headers.");
           // getAuthHeader already set error view
+          isPollingRef.current = false; // Reset polling flag
           return; // Stop polling if auth failed
       }
       const response = await axios.get(`${import.meta.env.VITE_API_URL}/api/process/status/${directory}`, { headers });
@@ -300,8 +368,8 @@ export default function HeatmapPage() {
         processingCompletedRef.current = true;
         if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
         pollingIntervalRef.current = null;
-        setCurrentView('results_loading'); // Trigger re-render, useEffect/initializeAndPoll will handle fetching results
-        // fetchHeatmapAndAnalytics(); // DO NOT CALL DIRECTLY - let useEffect handle it
+        // setCurrentView('results_loading'); // fetchHeatmapAndAnalytics will set this
+        fetchHeatmapAndAnalytics(); // Call directly now that polling is stopped
       } else if (data.status === 'error') {
         addDebugLog(`pollStatus: Processing error - ${data.message}`);
         setError(data.message || 'Processing failed.');
@@ -352,7 +420,9 @@ export default function HeatmapPage() {
     setCurrentView('processing'); // Assume we will be processing after restart
     setProgress(0);
     setHeatmapUrl(null);
-    setAnalyticsUrl(null);
+    setAnalyticsUrl(null); // Also reset analytics and zone data
+    setZoneActivity(null);
+    // setAnalyticsUrl(null); // Already set above
     setError('');
     setStatusMessage('Restarting processing...');
     processingCompletedRef.current = false;
@@ -370,6 +440,7 @@ export default function HeatmapPage() {
        if (!headers) {
           addDebugLog("Aborting restartProcessing: No auth headers.");
           // getAuthHeader already set error view
+          isInitializingEffectRunningRef.current = false; // Reset flag
           return; // Stop the process if auth failed
       }
       const processUrl = `${import.meta.env.VITE_API_URL}/api/process/${directory}`;
@@ -386,7 +457,7 @@ export default function HeatmapPage() {
 
       if (data.status === 'completed') {
         processingCompletedRef.current = true;
-        setCurrentView('results_loading');
+        // setCurrentView('results_loading'); // fetchHeatmapAndAnalytics will set this
         fetchHeatmapAndAnalytics();
       } else if (data.status === 'error') {
         setError(data.message || 'Failed to restart processing.');
@@ -428,99 +499,210 @@ export default function HeatmapPage() {
 
   const renderContent = () => {
     if (currentView === 'error') {
-      return <div className="text-red-500 mb-4 p-4 border border-red-300 bg-red-50 rounded-lg">{error || 'An unknown error occurred.'}</div>;
+      return (
+        <div className="mb-6 p-4 border border-red-200 bg-red-50 rounded-lg flex items-start space-x-3">
+          <AlertCircle className="h-5 w-5 text-red-600 mt-0.5" />
+          <div>
+            <h3 className="text-red-800 font-medium">Error</h3>
+            <p className="text-red-600">{error || 'An unknown error occurred.'}</p>
+          </div>
+        </div>
+      );
     }
 
-    // Show processing info if we are initializing, processing, loading results,
-    // or in results view but assets are not yet loaded.
-    const showProcessingInfo = currentView === 'initializing' || currentView === 'processing' || currentView === 'results_loading' || (currentView === 'results' && (!heatmapUrl || !analyticsUrl));
+    const showProcessingInfo = currentView === 'initializing' || currentView === 'processing' || currentView === 'results_loading' || (currentView === 'results' && (!heatmapUrl));
 
     return (
-      <div>
+      <div className="space-y-6">
         {showProcessingInfo && (
-            <div className="mb-4 p-4 border rounded-lg bg-blue-50 text-blue-700">
-              <p className="font-semibold">Status: {statusMessage}</p>
-              <p>Progress: {Math.max(0, progress)}%</p> {/* Ensure progress is not negative */}
-              <p className="text-sm text-gray-500">Last Updated: {lastUpdated.toLocaleTimeString()}</p>
-              {(currentView === 'processing' || currentView === 'initializing') && progress < 100 && ( // Show progress bar in initializing too
-                  <div className="w-full bg-gray-200 rounded-full h-2.5 mt-2">
-                    <div
-                      className="bg-blue-600 h-2.5 rounded-full"
-                      style={{
-                        width: `${Math.max(0, progress)}%`, // Ensure width is not negative
-                        transition: 'width 0.3s ease-in-out' // Smoother transition for width changes
-                      }}></div>
-                  </div>
-              )}
-              {currentView === 'results_loading' && (
-                  <p className="mt-2 text-green-600">Processing completed. Fetching results...</p>
-              )}
+          <div className="p-6 border rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50">
+            <div className="flex items-center justify-between mb-4">
+              <div className="space-y-1">
+                <h3 className="font-semibold text-blue-900">Processing Status</h3>
+                <p className="text-blue-700">{statusMessage}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-2xl font-bold text-blue-900">{Math.max(0, progress)}%</p>
+                <p className="text-sm text-blue-600">Last Updated: {lastUpdated.toLocaleString()}</p>
+              </div>
             </div>
+            
+            {(currentView === 'processing' || currentView === 'initializing') && progress < 100 && (
+              <div className="w-full bg-blue-100 rounded-full h-2.5">
+                <div
+                  className="bg-gradient-to-r from-blue-500 to-indigo-500 h-2.5 rounded-full transition-all duration-300 ease-out"
+                  style={{ width: `${Math.max(0, progress)}%` }}
+                />
+              </div>
+            )}
+            
+            {currentView === 'results_loading' && (
+              <div className="mt-4 flex items-center space-x-2 text-green-600">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-green-600"></div>
+                <span>Processing completed. Fetching results...</span>
+              </div>
+            )}
+          </div>
         )}
 
         {currentView === 'results' && heatmapUrl && (
-            <div className="mb-4">
-              <h3 className="text-xl font-semibold mb-2">Generated Heatmap</h3>
-              <img src={heatmapUrl} alt="Heatmap" className="max-w-full h-auto rounded-lg shadow-lg" />
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xl font-semibold text-gray-900">Generated Heatmap</h3>
+              <div className="text-sm text-gray-500">Click to view full size</div>
             </div>
+            <div className="relative group">
+              <img 
+                ref={imageRef} 
+                src={heatmapUrl} 
+                alt="Heatmap" 
+                className="w-full h-auto rounded-xl shadow-lg transition-transform duration-200 group-hover:scale-[1.02]" 
+                onLoad={() => setLastUpdated(new Date())}
+                onError={() => {
+                  addDebugLog(`Heatmap image failed to load. URL: ${heatmapUrl}`);
+                  setError("Failed to load the generated heatmap image. It might be corrupted or missing on the server.");
+                }}
+              />
+              {floorplanLayout && floorplanLayout.zones && zoneActivity && imageRef.current && imageRef.current.naturalWidth > 0 && (
+                <svg 
+                  className="absolute top-0 left-0 pointer-events-none" 
+                  width={imageRef.current.clientWidth} 
+                  height={imageRef.current.clientHeight}
+                  viewBox={`0 0 ${imageRef.current.naturalWidth} ${imageRef.current.naturalHeight}`}
+                  preserveAspectRatio="xMidYMid meet"
+                >
+                  {floorplanLayout.zones.map(zone => {
+                    const activity = zoneActivity ? zoneActivity[zone.id] : null;
+                    const score = activity ? activity.activity_score : 'N/A';
+                    let centroidX = 0;
+                    let centroidY = 0;
+                    if (zone.points && zone.points.length > 0) {
+                      zone.points.forEach(p => { centroidX += p.x; centroidY += p.y; });
+                      centroidX /= zone.points.length;
+                      centroidY /= zone.points.length;
+                    }
+
+                    return (
+                      <g key={zone.id}>
+                        <polygon 
+                          points={zone.points.map(p => `${p.x},${p.y}`).join(' ')} 
+                          fill={activity?.color || zone.color || "#CCCCCC"} 
+                          fillOpacity="0.2" 
+                          stroke={activity?.color || zone.color || "#CCCCCC"} 
+                          strokeWidth="2" 
+                        />
+                        <text 
+                          x={centroidX} 
+                          y={centroidY} 
+                          dy="-5" 
+                          textAnchor="middle" 
+                          fontSize="12" 
+                          fill="white" 
+                          stroke="black" 
+                          strokeWidth="0.5px" 
+                          fontWeight="bold" 
+                          style={{paintOrder: "stroke fill", pointerEvents: "none"}}
+                        >
+                          {zone.name}: {score}
+                        </text>
+                      </g>
+                    );
+                  })}
+                </svg>
+              )}
+            </div>
+          </div>
         )}
 
         {currentView === 'results' && analyticsUrl && (
-            <div className="mb-4 p-4 border rounded-lg bg-green-50 text-green-700 flex justify-between items-center">
-              <div>
-                <h3 className="text-xl font-semibold mb-2">Analytics Data</h3>
-                <p>Analytics data is ready for download.</p>
+          <div className="p-6 border rounded-xl bg-gradient-to-br from-green-50 to-emerald-50">
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <h3 className="text-xl font-semibold text-green-900 flex items-center space-x-2">
+                  <BarChart2 className="h-5 w-5" />
+                  <span>Analytics Data</span>
+                </h3>
+                <p className="text-green-700">Your analytics data is ready for download</p>
               </div>
-              <div>
-                <Button onClick={downloadAnalytics} variant="outline">
-                  Download Analytics Data
-                </Button>
-              </div>
+              <Button 
+                onClick={downloadAnalytics} 
+                className="bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white transition-all duration-200 flex items-center space-x-2"
+              >
+                <Download className="h-4 w-4" />
+                <span>Download Analytics</span>
+              </Button>
             </div>
+          </div>
         )}
       </div>
     );
   };
 
   return (
-      <div className="container mx-auto p-4 max-w-4xl">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-2xl font-bold">Heatmap & Analytics for {directory}</CardTitle>
-            <CardDescription>
-              View the generated heatmap and download analytics data for your video.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {renderContent()}
-            {/* Action Buttons - outside renderContent if always visible, or inside if view-dependent */}
-            <div className="flex flex-wrap gap-2 mt-4">
-              <Button onClick={refreshStatus} variant="outline" disabled={currentView === 'initializing' || processingCompletedRef.current || isPollingRef.current || isInitializingEffectRunningRef.current}>
-                Refresh Status
-              </Button>
-              <Button onClick={restartProcessing} variant="outline" disabled={isInitializingEffectRunningRef.current}>
-                Restart Processing
-              </Button>
-              <Button onClick={toggleDebugLogging} variant="outline" className="ml-auto">
-                {debugLoggingEnabledRef.current ? 'Disable Debug Logs' : 'Enable Debug Logs'}
-              </Button>
-            </div>
+    <div className="container mx-auto p-4 max-w-6xl">
+      <Card className="border-none shadow-lg bg-gradient-to-br from-white to-gray-50">
+        <CardHeader className="space-y-1">
+          <div className="flex items-center space-x-2">
+            <Activity className="h-8 w-8 text-indigo-600" />
+            <CardTitle className="text-2xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
+              Heatmap & Analytics
+            </CardTitle>
+          </div>
+          <CardDescription className="text-base mt-2">
+            View the generated heatmap and download analytics data for your video: {directory}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {renderContent()}
+          
+          {/* Action Buttons */}
+          <div className="flex flex-wrap gap-3 mt-6">
+            <Button 
+              onClick={refreshStatus} 
+              variant="outline" 
+              className="flex items-center space-x-2"
+              disabled={currentView === 'initializing' || processingCompletedRef.current || isPollingRef.current || isInitializingEffectRunningRef.current}
+            >
+              <RefreshCw className="h-4 w-4" />
+              <span>Refresh Status</span>
+            </Button>
+            <Button 
+              onClick={restartProcessing} 
+              variant="outline" 
+              className="flex items-center space-x-2"
+              disabled={isInitializingEffectRunningRef.current}
+            >
+              <Play className="h-4 w-4" />
+              <span>Restart Processing</span>
+            </Button>
+            <Button 
+              onClick={toggleDebugLogging} 
+              variant="outline" 
+              className="ml-auto flex items-center space-x-2"
+            >
+              <Bug className="h-4 w-4" />
+              <span>{debugLoggingEnabledRef.current ? 'Disable Debug Logs' : 'Enable Debug Logs'}</span>
+            </Button>
+          </div>
 
-            {/* Debug Logs */}
-            {debugLoggingEnabledRef.current && debugLogs.length > 0 && (
-                <div className="mt-8 p-4 border rounded-lg bg-gray-50">
-                  <h3 className="text-lg font-semibold mb-2">Debug Logs</h3>
-                  <div className="max-h-60 overflow-y-auto text-xs font-mono">
-                    {debugLogs.map((log, index) => (
-                        <div key={index} className="py-1 border-b border-gray-200">
-                          {log}
-                        </div>
-                    ))}
+          {/* Debug Logs */}
+          {debugLoggingEnabledRef.current && debugLogs.length > 0 && (
+            <div className="mt-8 p-4 border rounded-lg bg-gray-50">
+              <h3 className="text-lg font-semibold mb-3 flex items-center space-x-2">
+                <Bug className="h-5 w-5 text-gray-600" />
+                <span>Debug Logs</span>
+              </h3>
+              <div className="max-h-60 overflow-y-auto text-xs font-mono bg-gray-900 text-gray-100 rounded-lg p-4">
+                {debugLogs.map((log, index) => (
+                  <div key={index} className="py-1 border-b border-gray-700 last:border-0">
+                    {log}
                   </div>
-                </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
